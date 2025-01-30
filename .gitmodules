@@ -1,0 +1,3 @@
+[submodule "VMASharp"]
+	path = VMASharp
+	url = https://github.com/MineGame159/VMASharp.git
