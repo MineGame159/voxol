@@ -42,7 +42,7 @@ public class GpuContext {
         CreateInstance();
         SelectPhysicalDevice();
         CreateDevice();
-        
+
         Surface = new GpuSurface(this);
         Swapchain = new GpuSwapchain(this, window);
 
@@ -86,24 +86,30 @@ public class GpuContext {
 
     public unsafe GpuAccelStruct CreateAccelStruct<T>(ReadOnlySpan<T> primitives, bool bottomLevel, ref GpuBuffer? scratchBuffer)
         where T : unmanaged {
-        var primitiveBuffer = CreateStaticBuffer(
-            primitives,
+        var primitiveBuffer = CreateBuffer(
+            (ulong) primitives.Length * Utils.SizeOf<T>() + 16u,
             BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr | BufferUsageFlags.ShaderDeviceAddressBit |
-            BufferUsageFlags.StorageBufferBit
+            BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+            MemoryUsage.GPU_Only
         );
+
+        var primitiveBufferAddress = Utils.Align(primitiveBuffer.DeviceAddress, 16u);
+        var offset = primitiveBufferAddress - primitiveBuffer.DeviceAddress;
+
+        GpuSyncUploads.UploadToBuffer(primitives, primitiveBuffer.Sub(offset, (ulong) primitives.Length * Utils.SizeOf<T>()));
 
         var geometry = new AccelerationStructureGeometryKHR(
             geometryType: bottomLevel ? GeometryTypeKHR.AabbsKhr : GeometryTypeKHR.InstancesKhr,
             geometry: new AccelerationStructureGeometryDataKHR(
                 aabbs: bottomLevel
                     ? new AccelerationStructureGeometryAabbsDataKHR(
-                        data: new DeviceOrHostAddressConstKHR(deviceAddress: primitiveBuffer.DeviceAddress),
+                        data: new DeviceOrHostAddressConstKHR(deviceAddress: primitiveBufferAddress),
                         stride: Utils.SizeOf<T>()
                     )
                     : null,
                 instances: !bottomLevel
                     ? new AccelerationStructureGeometryInstancesDataKHR(
-                        data: new DeviceOrHostAddressConstKHR(deviceAddress: primitiveBuffer.DeviceAddress)
+                        data: new DeviceOrHostAddressConstKHR(deviceAddress: primitiveBufferAddress)
                     )
                     : null
             ),
@@ -209,18 +215,7 @@ public class GpuContext {
             MemoryUsage.GPU_Only
         );
 
-        var uploadBuffer = CreateBuffer(
-            (ulong) data.Length * Utils.SizeOf<T>(),
-            BufferUsageFlags.TransferSrcBit,
-            MemoryUsage.CPU_Only
-        );
-
-        uploadBuffer.Write(data);
-
-        // ReSharper disable once AccessToDisposedClosure
-        Run(commandBuffer => commandBuffer.CopyBuffer(uploadBuffer, buffer));
-
-        uploadBuffer.Dispose();
+        GpuSyncUploads.UploadToBuffer(data, buffer);
 
         return buffer;
     }

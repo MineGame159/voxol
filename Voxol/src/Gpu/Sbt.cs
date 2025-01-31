@@ -78,14 +78,6 @@ public class SbtBuilder {
 
     [SuppressMessage("ReSharper", "AccessToDisposedClosure")]
     private (GpuBuffer, ulong) CreateBuffer(ReadOnlySpan<byte> data) {
-        var uploadBuffer = ctx.CreateBuffer(
-            (ulong) data.Length,
-            BufferUsageFlags.TransferSrcBit,
-            MemoryUsage.CPU_Only
-        );
-        
-        uploadBuffer.Write(data);
-
         var buffer = ctx.CreateBuffer(
             (ulong) data.Length + properties.ShaderGroupBaseAlignment,
             BufferUsageFlags.ShaderBindingTableBitKhr | BufferUsageFlags.ShaderDeviceAddressBit | BufferUsageFlags.TransferDstBit,
@@ -95,11 +87,7 @@ public class SbtBuilder {
         var address = Utils.Align(buffer.DeviceAddress, properties.ShaderGroupBaseAlignment);
         var offset = address - buffer.DeviceAddress;
         
-        ctx.Run(commandBuffer => {
-            commandBuffer.CopyBuffer(uploadBuffer, buffer.Sub(offset, uploadBuffer.Size));
-        });
-        
-        uploadBuffer.Dispose();
+        GpuSyncUploads.UploadToBuffer(data, buffer.Sub(offset, (ulong) data.Length));
 
         return (buffer, address);
     }

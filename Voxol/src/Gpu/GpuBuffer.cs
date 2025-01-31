@@ -35,6 +35,7 @@ public class GpuBuffer : GpuResource, IDescriptor {
     public unsafe ulong DeviceAddress => Ctx.Vk.GetBufferDeviceAddress(Ctx.Device, new BufferDeviceAddressInfo(buffer: Handle));
 
     public GpuSubBuffer Sub(ulong offset, ulong size) => new(this, offset, size);
+    public GpuSubBuffer Sub(ulong offset) => new(this, offset, Size - offset);
 
     public unsafe Span<T> Map<T>() where T : unmanaged {
         return new Span<T>((void*) allocation.Map(), (int) (Size / (ulong) sizeof(T)));
