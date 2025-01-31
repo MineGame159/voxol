@@ -124,6 +124,10 @@ public class GpuContext {
             pGeometries: &geometry
         );
 
+        if (bottomLevel) {
+            buildInfo.Flags |= BuildAccelerationStructureFlagsKHR.AllowCompactionBitKhr;
+        }
+
         var sizes = AccelStructApi.GetAccelerationStructureBuildSizes(
             Device,
             AccelerationStructureBuildTypeKHR.DeviceKhr,
@@ -169,12 +173,74 @@ public class GpuContext {
             primitiveCount: (uint) primitives.Length
         );
 
+        var queryPool = default(QueryPool);
+
+        if (bottomLevel) {
+            Vk.CreateQueryPool(Device, new QueryPoolCreateInfo(
+                queryType: QueryType.AccelerationStructureCompactedSizeKhr,
+                queryCount: 1
+            ), null, out queryPool);
+
+            Vk.ResetQueryPool(Device, queryPool, 0, 1);
+        }
+
         Run(commandBuffer => {
             var buildRange2 = buildRange;
             AccelStructApi.CmdBuildAccelerationStructures(commandBuffer, 1, buildInfo, &buildRange2);
+
+            if (bottomLevel) {
+                Vk.CmdPipelineBarrier(
+                    commandBuffer,
+                    PipelineStageFlags.AccelerationStructureBuildBitKhr,
+                    PipelineStageFlags.AccelerationStructureBuildBitKhr,
+                    DependencyFlags.None,
+                    1, new MemoryBarrier(
+                        srcAccessMask: AccessFlags.AccelerationStructureWriteBitKhr,
+                        dstAccessMask: AccessFlags.AccelerationStructureReadBitKhr
+                    ), 
+                    0, null,
+                    0, null
+                );
+                
+                // ReSharper disable once AccessToModifiedClosure
+                AccelStructApi.CmdWriteAccelerationStructuresProperties(commandBuffer, 1, accelStruct,
+                    QueryType.AccelerationStructureCompactedSizeKhr, queryPool, 0);
+            }
         });
 
         primitiveBuffer.Dispose();
+
+        if (bottomLevel) {
+            ulong compactedSize = 0;
+            Vk.GetQueryPoolResults(Device, queryPool, 0, 1, sizeof(ulong), ref compactedSize, sizeof(ulong), QueryResultFlags.ResultWaitBit);
+            
+            var compactedAccelStructBuffer = CreateBuffer(
+                compactedSize,
+                BufferUsageFlags.AccelerationStructureStorageBitKhr | BufferUsageFlags.ShaderDeviceAddressBit,
+                MemoryUsage.GPU_Only
+            );
+            
+            AccelStructApi.CreateAccelerationStructure(Device, new AccelerationStructureCreateInfoKHR(
+                buffer: compactedAccelStructBuffer,
+                size: compactedSize,
+                type: buildInfo.Type
+            ), null, out var compactedAccelStruct);
+            
+            Run(commandBuffer => {
+                AccelStructApi.CmdCopyAccelerationStructure(commandBuffer, new CopyAccelerationStructureInfoKHR(
+                    // ReSharper disable once AccessToModifiedClosure
+                    src: accelStruct,
+                    dst: compactedAccelStruct,
+                    mode: CopyAccelerationStructureModeKHR.CompactKhr
+                ));
+            });
+            
+            AccelStructApi.DestroyAccelerationStructure(Device, accelStruct, null);
+            accelStructBuffer.Dispose();
+
+            accelStruct = compactedAccelStruct;
+            accelStructBuffer = compactedAccelStructBuffer;
+        }
 
         return new GpuAccelStruct(this, accelStruct, accelStructBuffer);
     }
