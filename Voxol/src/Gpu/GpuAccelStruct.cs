@@ -2,14 +2,11 @@ using Silk.NET.Vulkan;
 
 namespace Voxol.Gpu;
 
-public class GpuAccelStruct : IDescriptor, IDisposable {
-    public readonly GpuContext Ctx;
-    
+public class GpuAccelStruct : GpuResource, IDescriptor {
     public readonly AccelerationStructureKHR Handle;
     public readonly GpuBuffer Buffer;
 
-    public GpuAccelStruct(GpuContext ctx, AccelerationStructureKHR handle, GpuBuffer buffer) {
-        Ctx = ctx;
+    public GpuAccelStruct(GpuContext ctx, AccelerationStructureKHR handle, GpuBuffer buffer) : base(ctx) {
         Handle = handle;
         Buffer = buffer;
     }
@@ -33,7 +30,9 @@ public class GpuAccelStruct : IDescriptor, IDisposable {
         }
     }
 
-    public void Dispose() {
+    public override void Dispose() {
+        Ctx.OnDestroyResource(this);
+        
         unsafe {
             Ctx.AccelStructApi.DestroyAccelerationStructure(Ctx.Device, Handle, null);
         }

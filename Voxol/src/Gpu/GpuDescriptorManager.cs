@@ -23,7 +23,7 @@ public class GpuDescriptorManager {
         ];
 
         unsafe {
-            Utils.Wrap(this.ctx.Vk.CreateDescriptorPool(this.ctx.Device, new DescriptorPoolCreateInfo(
+            Utils.Wrap(ctx.Vk.CreateDescriptorPool(this.ctx.Device, new DescriptorPoolCreateInfo(
                 flags: DescriptorPoolCreateFlags.FreeDescriptorSetBit,
                 maxSets: 100,
                 poolSizeCount: (uint) poolSizes.Length,
@@ -34,6 +34,15 @@ public class GpuDescriptorManager {
 
     internal void OnDestroyResource(GpuResource resource) {
         if (resource is IDescriptor descriptor) {
+            foreach (var pair in sets) {
+                if (pair.Keys.Contains(descriptor)) {
+                    Utils.Wrap(
+                        ctx.Vk.FreeDescriptorSets(ctx.Device, pool, 1, pair.Value),
+                        "Failed to free a Descriptor Set"
+                    );
+                }
+            }
+
             sets.Remove(descriptors => descriptors.Contains(descriptor));
         }
     }
