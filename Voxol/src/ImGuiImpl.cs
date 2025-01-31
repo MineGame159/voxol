@@ -16,6 +16,8 @@ file record struct Uniforms {
 };
 
 public static class ImGuiImpl {
+    private static GpuContext ctx = null!;
+    
     private static GpuGraphicsPipeline? pipeline;
     private static GpuBuffer uniformBuffer = null!;
     private static GpuImage fontImage = null!;
@@ -25,6 +27,8 @@ public static class ImGuiImpl {
     private static GpuBuffer? indexBuffer;
 
     public static void Init(GpuContext ctx) {
+        ImGuiImpl.ctx = ctx;
+        
         ImGui.CreateContext();
         
         var io = ImGui.GetIO();
@@ -68,8 +72,8 @@ public static class ImGuiImpl {
     public static void BeginFrame(float delta) {
         var io = ImGui.GetIO();
 
-        io.DisplaySize = new Vector2(1280, 720);
-        io.DisplayFramebufferScale = new Vector2(1, 1);
+        io.DisplaySize = ctx.Swapchain.WindowSize.As<float>().ToSystem();
+        io.DisplayFramebufferScale = ctx.Swapchain.FramebufferSize.As<float>().ToSystem() / io.DisplaySize;
         io.DeltaTime = delta;
         
         UpdateMouseCursor();
@@ -257,7 +261,7 @@ public static class ImGuiImpl {
         io.Fonts.GetTexDataAsRGBA32(out IntPtr pixels, out var width, out var height);
 
         fontImage = ctx.CreateImage(
-            (uint) width, (uint) height,
+            new Vector2D<uint>((uint) width, (uint) height),
             ImageUsageFlags.SampledBit | ImageUsageFlags.TransferDstBit,
             Format.R8G8B8A8Unorm
         );

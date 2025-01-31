@@ -16,6 +16,10 @@ public class GpuAccelStruct : IDescriptor, IDisposable {
 
     public DescriptorType DescriptorType => DescriptorType.AccelerationStructureKhr;
 
+    public bool Equals(IDescriptor? other) {
+        return ReferenceEquals(this, other);
+    }
+
     public ulong DeviceAddress {
         get {
             unsafe {

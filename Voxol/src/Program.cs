@@ -26,11 +26,14 @@ public struct Uniforms {
 }
 
 internal class Program : Application {
-    private static GpuImage image = null!;
     private static GpuRayTracePipeline pipeline = null!;
     private static Sbt sbt;
+    
     private static GpuBuffer uniformBuffer = null!;
-    private static DescriptorSet descriptorSet;
+    private static GpuAccelStruct topAccelStruct = null!;
+    private static GpuBuffer chunkVoxelIndexBuffer = null!;
+    private static GpuBuffer voxelBuffer = null!;
+    private static GpuImage? image;
 
     private static Camera camera = null!;
     private static Uniforms uniforms;
@@ -46,11 +49,7 @@ internal class Program : Application {
     private static ulong voxelBytes;
 
     protected override void Init() {
-        image = Ctx.CreateImage(
-            1280, 720,
-            ImageUsageFlags.StorageBit | ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
-            Format.R8G8B8A8Unorm
-        );
+        Resize(Ctx.Swapchain);
 
         var vox = new Voxelizer();
         vox.Resolution = 256;
@@ -135,12 +134,12 @@ internal class Program : Application {
             }
         }
 
-        var chunkVoxelIndexBuffer = Ctx.CreateStaticBuffer(CollectionsMarshal.AsSpan(chunkVoxelIndices), BufferUsageFlags.StorageBufferBit);
-        var voxelBuffer = Ctx.CreateStaticBuffer(voxels.AsSpan(), BufferUsageFlags.StorageBufferBit);
+        chunkVoxelIndexBuffer = Ctx.CreateStaticBuffer(CollectionsMarshal.AsSpan(chunkVoxelIndices), BufferUsageFlags.StorageBufferBit);
+        voxelBuffer = Ctx.CreateStaticBuffer(voxels.AsSpan(), BufferUsageFlags.StorageBufferBit);
 
         voxelBytes = voxelBuffer.Size;
 
-        var topAccelStruct = Ctx.CreateAccelStruct(CollectionsMarshal.AsSpan(chunkInstances), false, ref scratchBuffer);
+        topAccelStruct = Ctx.CreateAccelStruct(CollectionsMarshal.AsSpan(chunkInstances), false, ref scratchBuffer);
         scratchBuffer?.Dispose();
 
         accelStructBytes += topAccelStruct.Buffer.Size;
@@ -184,17 +183,11 @@ internal class Program : Application {
             MemoryUsage.CPU_To_GPU
         );
 
-        descriptorSet = Ctx.Descriptors.GetSet([
-            uniformBuffer,
-            topAccelStruct,
-            chunkVoxelIndexBuffer,
-            voxelBuffer,
-            image
-        ]);
-
         camera = new Camera(new Vector3(), 0, 0);
 
         uniforms.Shadows = true;
+
+        Ctx.Swapchain.Resize += Resize;
 
         // ImGui
 
@@ -208,7 +201,17 @@ internal class Program : Application {
         style.Alpha = 0.85f;
     }
 
-    protected override void Render(float delta, GpuCommandBuffer commandBuffer, uint swapchainImageIndex) {
+    private void Resize(GpuSwapchain swapchain) {
+        image?.Dispose();
+        
+        image = Ctx.CreateImage(
+            swapchain.FramebufferSize,
+            ImageUsageFlags.StorageBit | ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
+            Format.R8G8B8A8Unorm
+        );
+    }
+
+    protected override void Render(float delta, GpuCommandBuffer commandBuffer, GpuImage output) {
         // Stats
 
         if (frameQuery is { Time.Days: < 1 })
@@ -221,20 +224,20 @@ internal class Program : Application {
 
         camera.Move(delta);
         
-        uniforms.Camera = camera.GetData(Window.FramebufferSize.X, Window.FramebufferSize.Y);
+        uniforms.Camera = camera.GetData(Ctx.Swapchain.FramebufferSize.X, Ctx.Swapchain.FramebufferSize.Y);
         uniformBuffer.Write(ref uniforms);
 
         // Scene
 
         commandBuffer.TransitionImage(
-            image,
+            image!,
             ImageLayout.General,
             PipelineStageFlags.TopOfPipeBit, AccessFlags.None,
             PipelineStageFlags.RayTracingShaderBitKhr, AccessFlags.ShaderWriteBit
         );
 
         commandBuffer.TransitionImage(
-            Ctx.SwapchainImages[swapchainImageIndex],
+            output,
             ImageLayout.General,
             PipelineStageFlags.TopOfPipeBit, AccessFlags.None,
             PipelineStageFlags.TransferBit, AccessFlags.TransferWriteBit
@@ -243,7 +246,7 @@ internal class Program : Application {
         RenderScene(commandBuffer);
 
         commandBuffer.TransitionImage(
-            image,
+            image!,
             ImageLayout.General,
             PipelineStageFlags.RayTracingShaderBitKhr, AccessFlags.ShaderWriteBit,
             PipelineStageFlags.ColorAttachmentOutputBit, AccessFlags.ColorAttachmentWriteBit
@@ -254,7 +257,7 @@ internal class Program : Application {
         RenderGui(commandBuffer, delta);
 
         commandBuffer.TransitionImage(
-            image,
+            image!,
             ImageLayout.General,
             PipelineStageFlags.ColorAttachmentOutputBit, AccessFlags.ColorAttachmentWriteBit,
             PipelineStageFlags.TransferBit, AccessFlags.TransferReadBit
@@ -262,10 +265,10 @@ internal class Program : Application {
 
         // Present
 
-        commandBuffer.BlitImage(image, Ctx.SwapchainImages[swapchainImageIndex], Filter.Nearest);
+        commandBuffer.BlitImage(image!, output, Filter.Nearest);
 
         commandBuffer.TransitionImage(
-            Ctx.SwapchainImages[swapchainImageIndex],
+            output,
             ImageLayout.PresentSrcKhr,
             PipelineStageFlags.TransferBit, AccessFlags.TransferWriteBit,
             PipelineStageFlags.BottomOfPipeBit, AccessFlags.None
@@ -281,8 +284,14 @@ internal class Program : Application {
         commandBuffer.BeginGroup("Scene");
 
         commandBuffer.BindPipeline(pipeline);
-        commandBuffer.BindDescriptorSet(0, descriptorSet);
-        commandBuffer.TraceRays(sbt, 1280, 720, 1);
+        commandBuffer.BindDescriptorSet(0, [
+            uniformBuffer,
+            topAccelStruct,
+            chunkVoxelIndexBuffer,
+            voxelBuffer,
+            image
+        ]);
+        commandBuffer.TraceRays(sbt, image!.Size.X, image.Size.Y, 1);
 
         commandBuffer.EndGroup();
     }
@@ -311,7 +320,7 @@ internal class Program : Application {
 
         ImGui.End();
 
-        ImGuiImpl.EndFrame(commandBuffer, image);
+        ImGuiImpl.EndFrame(commandBuffer, image!);
         commandBuffer.EndGroup();
     }
 

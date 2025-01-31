@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Silk.NET.Core;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
+using Silk.NET.Maths;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
@@ -11,7 +12,6 @@ using VMASharp;
 namespace Voxol.Gpu;
 
 public class GpuContext {
-    public readonly IWindow Window;
     public readonly Vk Vk;
     public readonly IVkSurface VkSurface;
 
@@ -20,14 +20,12 @@ public class GpuContext {
     public PhysicalDevice PhysicalDevice;
     public Device Device;
     public Queue Queue;
-    public KhrSwapchain SwapchainApi = null!;
     public KhrDeferredHostOperations DeferredApi = null!;
     public KhrAccelerationStructure AccelStructApi = null!;
     public KhrRayTracingPipeline RayTracingApi = null!;
-    public KhrSurface SurfaceApi = null!;
-    public SurfaceKHR Surface;
-    public SwapchainKHR Swapchain;
-    public GpuImage[] SwapchainImages = null!;
+
+    public readonly GpuSurface Surface;
+    public readonly GpuSwapchain Swapchain;
 
     public readonly VulkanMemoryAllocator Allocator;
     public readonly GpuDescriptorManager Descriptors;
@@ -38,15 +36,15 @@ public class GpuContext {
     private readonly Fence runFence;
 
     public GpuContext(IWindow window) {
-        Window = window;
         Vk = Vk.GetApi();
         VkSurface = window.VkSurface!;
 
         CreateInstance();
         SelectPhysicalDevice();
         CreateDevice();
-        CreateSurface();
-        CreateSwapchain();
+        
+        Surface = new GpuSurface(this);
+        Swapchain = new GpuSwapchain(this, window);
 
         /*unsafe {
             debugUtilsApi.CreateDebugUtilsMessenger(Instance, new DebugUtilsMessengerCreateInfoEXT(
@@ -80,6 +78,10 @@ public class GpuContext {
 
     internal void NewFrame() {
         Queries.NewFrame();
+    }
+
+    internal void OnDestroyResource(GpuResource resource) {
+        Descriptors.OnDestroyResource(resource);
     }
 
     public unsafe GpuAccelStruct CreateAccelStruct<T>(ReadOnlySpan<T> primitives, bool bottomLevel, ref GpuBuffer? scratchBuffer)
@@ -227,12 +229,12 @@ public class GpuContext {
         return CreateStaticBuffer((ReadOnlySpan<T>) data, usage);
     }
 
-    public unsafe GpuImage CreateImage(uint width, uint height, ImageUsageFlags usage, Format format) {
+    public unsafe GpuImage CreateImage(Vector2D<uint> size, ImageUsageFlags usage, Format format) {
         var image = Allocator.CreateImage(
             new ImageCreateInfo(
                 imageType: ImageType.Type2D,
                 format: format,
-                extent: new Extent3D(width, height, 1),
+                extent: new Extent3D(size.X, size.Y, 1),
                 mipLevels: 1,
                 arrayLayers: 1,
                 samples: SampleCountFlags.Count1Bit,
@@ -245,7 +247,7 @@ public class GpuContext {
             out var allocation
         );
 
-        return new GpuImage(this, image, width, height, usage, format, allocation);
+        return new GpuImage(this, image, size, usage, format, allocation);
     }
 
     public unsafe Sampler CreateSampler(Filter mag, Filter min, SamplerAddressMode wrap) {
@@ -441,9 +443,6 @@ public class GpuContext {
 
         Vk.GetDeviceQueue(Device, queueIndices.Graphics!.Value, 0, out Queue);
 
-        if (!Vk.TryGetDeviceExtension(Instance, Device, out SwapchainApi))
-            throw new Exception("Failed to get Swapchain API");
-
         if (!Vk.TryGetDeviceExtension(Instance, Device, out DeferredApi))
             throw new Exception("Failed to get Deferred Host Operations API");
 
@@ -456,119 +455,5 @@ public class GpuContext {
         for (var i = 0; i < 4; i++) {
             SilkMarshal.FreeString((IntPtr) extensions[i]);
         }
-    }
-
-    private unsafe void CreateSurface() {
-        if (!Vk.TryGetInstanceExtension(Instance, out SurfaceApi))
-            throw new Exception("Failed to get Surface API");
-
-        Surface = VkSurface.Create<AllocationCallbacks>(new VkHandle(Instance.Handle), null).ToSurface();
-    }
-
-    private unsafe void CreateSwapchain() {
-        Utils.Wrap(
-            SurfaceApi.GetPhysicalDeviceSurfaceCapabilities(PhysicalDevice, Surface, out var capabilities),
-            "Failed to get surface capabilities"
-        );
-
-        var formatCount = 0u;
-        SurfaceApi.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, null);
-
-        Span<SurfaceFormatKHR> formats = stackalloc SurfaceFormatKHR[(int) formatCount];
-        SurfaceApi.GetPhysicalDeviceSurfaceFormats(PhysicalDevice, Surface, ref formatCount, Utils.AsPtr(formats));
-
-        var presentModeCount = 0u;
-        SurfaceApi.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, null);
-
-        Span<PresentModeKHR> presentModes = stackalloc PresentModeKHR[(int) formatCount];
-        SurfaceApi.GetPhysicalDeviceSurfacePresentModes(PhysicalDevice, Surface, ref presentModeCount, Utils.AsPtr(presentModes));
-
-        var surfaceFormat = ChooseSwapSurfaceFormat(formats);
-        var extent = ChooseSwapExtent(capabilities);
-        var presentMode = ChoosePresentMode(presentModes);
-
-        var imageCount = capabilities.MinImageCount + 1;
-        if (capabilities.MaxImageCount > 0 && imageCount > capabilities.MaxImageCount)
-            imageCount = capabilities.MaxImageCount;
-
-        var queueIndex = Utils.GetQueueIndices(Vk, PhysicalDevice).Graphics!.Value;
-
-        Utils.Wrap(
-            SwapchainApi.CreateSwapchain(Device, new SwapchainCreateInfoKHR(
-                surface: Surface,
-                minImageCount: imageCount,
-                imageFormat: surfaceFormat.Format,
-                imageColorSpace: surfaceFormat.ColorSpace,
-                imageExtent: extent,
-                imageArrayLayers: 1,
-                imageUsage: ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferDstBit,
-                imageSharingMode: SharingMode.Exclusive,
-                queueFamilyIndexCount: 1,
-                pQueueFamilyIndices: &queueIndex,
-                preTransform: capabilities.CurrentTransform,
-                compositeAlpha: CompositeAlphaFlagsKHR.OpaqueBitKhr,
-                presentMode: presentMode,
-                clipped: true
-            ), null, out Swapchain),
-            "Failed to create Swapchain"
-        );
-
-        var count = 0u;
-        SwapchainApi.GetSwapchainImages(Device, Swapchain, ref count, null);
-
-        Span<Image> swapchainImages = stackalloc Image[(int) count];
-        SwapchainApi.GetSwapchainImages(Device, Swapchain, ref count, Utils.AsPtr(swapchainImages));
-
-        SwapchainImages = new GpuImage[count];
-
-        for (var i = 0; i < count; i++) {
-            SwapchainImages[i] = new GpuImage(this, swapchainImages[i], extent.Width, extent.Height,
-                ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferDstBit, surfaceFormat.Format, null);
-        }
-    }
-
-    private SurfaceFormatKHR ChooseSwapSurfaceFormat(ReadOnlySpan<SurfaceFormatKHR> availableFormats) {
-        foreach (var availableFormat in availableFormats) {
-            if (availableFormat is { Format: Format.B8G8R8A8Unorm, ColorSpace: ColorSpaceKHR.SpaceSrgbNonlinearKhr })
-                return availableFormat;
-        }
-
-        return availableFormats[0];
-    }
-
-    private PresentModeKHR ChoosePresentMode(ReadOnlySpan<PresentModeKHR> availablePresentModes) {
-        foreach (var availablePresentMode in availablePresentModes) {
-            if (availablePresentMode == PresentModeKHR.MailboxKhr)
-                return availablePresentMode;
-        }
-
-        return PresentModeKHR.FifoKhr;
-    }
-
-    private Extent2D ChooseSwapExtent(SurfaceCapabilitiesKHR capabilities) {
-        if (capabilities.CurrentExtent.Width != uint.MaxValue)
-            return capabilities.CurrentExtent;
-
-        var framebufferSize = Window.FramebufferSize;
-
-        Extent2D actualExtent = new() {
-            Width = (uint) framebufferSize.X,
-            Height = (uint) framebufferSize.Y
-        };
-
-        actualExtent.Width = Math.Clamp(actualExtent.Width, capabilities.MinImageExtent.Width, capabilities.MaxImageExtent.Width);
-        actualExtent.Height = Math.Clamp(actualExtent.Height, capabilities.MinImageExtent.Height, capabilities.MaxImageExtent.Height);
-
-        return actualExtent;
-    }
-
-    public unsafe QueueFamilyProperties GetQueueProperties(uint index) {
-        var count = 0u;
-        Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref count, null);
-
-        Span<QueueFamilyProperties> families = stackalloc QueueFamilyProperties[(int) count];
-        Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref count, Utils.AsPtr(families));
-
-        return families[(int) index];
     }
 }

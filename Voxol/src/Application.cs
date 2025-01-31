@@ -20,7 +20,6 @@ public abstract class Application {
             Title = "Voxol",
             Size = new Vector2D<int>(1280, 720),
             IsVisible = true,
-            WindowBorder = WindowBorder.Fixed,
             API = new GraphicsAPI(ContextAPI.Vulkan, ContextProfile.Core, ContextFlags.Debug, new APIVersion(1, 3))
         });
 
@@ -30,7 +29,7 @@ public abstract class Application {
 
     protected abstract void Init();
 
-    protected abstract void Render(float delta, GpuCommandBuffer commandBuffer, uint swapchainImageIndex);
+    protected abstract void Render(float delta, GpuCommandBuffer commandBuffer, GpuImage output);
 
     public void Run() {
         Window.Run();
@@ -53,24 +52,23 @@ public abstract class Application {
 
     private unsafe void RenderInternal(double delta) {
         Ctx.Vk.WaitForFences(Ctx.Device, 1, submitFence, true, ulong.MaxValue);
+        
+        var output = Ctx.Swapchain.GetNextImage(this.acquireImageSemaphore);
+        if (output == null) return;
+        
         Ctx.Vk.ResetFences(Ctx.Device, 1, submitFence);
         
         Ctx.NewFrame();
 
-        var swapchain = Ctx.Swapchain;
         var acquireImageSemaphore = this.acquireImageSemaphore;
         var submitSemaphore = this.submitSemaphore;
-
-        var swapchainImageIndex = 0u;
-        Ctx.SwapchainApi.AcquireNextImage(Ctx.Device, swapchain, ulong.MaxValue, acquireImageSemaphore, new Fence(),
-            ref swapchainImageIndex);
 
         Ctx.CommandPool.Reset();
 
         var commandBuffer = Ctx.CommandPool.Get();
         
         commandBuffer.Begin();
-        Render((float) delta, commandBuffer, swapchainImageIndex);
+        Render((float) delta, commandBuffer, output);
         Input.Update();
         commandBuffer.End();
 
@@ -88,12 +86,6 @@ public abstract class Application {
             ), submitFence);
         }
 
-        Ctx.SwapchainApi.QueuePresent(Ctx.Queue, new PresentInfoKHR(
-            waitSemaphoreCount: 1,
-            pWaitSemaphores: &submitSemaphore,
-            swapchainCount: 1,
-            pSwapchains: &swapchain,
-            pImageIndices: &swapchainImageIndex
-        ));
+        Ctx.Swapchain.Present(output, submitSemaphore);
     }
 }

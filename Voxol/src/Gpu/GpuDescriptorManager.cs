@@ -32,6 +32,12 @@ public class GpuDescriptorManager {
         }
     }
 
+    internal void OnDestroyResource(GpuResource resource) {
+        if (resource is IDescriptor descriptor) {
+            sets.Remove(descriptors => descriptors.Contains(descriptor));
+        }
+    }
+
     public unsafe DescriptorSetLayout GetLayout(ReadOnlySpan<DescriptorType?> types) {
         if (!layouts.TryGetValue(types, out var layout)) {
             Span<DescriptorSetLayoutBinding> bindings = stackalloc DescriptorSetLayoutBinding[Utils.NonNullCount(types)];
@@ -134,7 +140,7 @@ public class GpuDescriptorManager {
                     case GpuAccelStruct accelStruct: {
                         var handle = stackalloc AccelerationStructureKHR[1];
                         *handle = accelStruct.Handle;
-                        
+
                         var info = stackalloc WriteDescriptorSetAccelerationStructureKHR[1];
                         *info = new WriteDescriptorSetAccelerationStructureKHR(
                             accelerationStructureCount: 1,

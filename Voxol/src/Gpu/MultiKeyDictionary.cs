@@ -6,7 +6,7 @@ namespace Voxol.Gpu;
 public class MultiKeyDictionary<TKey, TValue> : IEnumerable<MultiKeyDictionary<TKey, TValue>.Pair> {
     private readonly EqualityComparer<TKey> keyComparer = EqualityComparer<TKey>.Default;
     private readonly List<Pair> pairs = [];
-    
+
     public TValue this[ReadOnlySpan<TKey> keys] {
         set => Add(keys, value);
     }
@@ -22,15 +22,29 @@ public class MultiKeyDictionary<TKey, TValue> : IEnumerable<MultiKeyDictionary<T
                 return true;
             }
         }
-        
+
         value = default;
         return false;
+    }
+
+    public void Remove(Func<ReadOnlySpan<TKey>, bool> predicate) {
+        var toRemove = new List<int>();
+
+        for (var i = 0; i < pairs.Count; i++) {
+            if (predicate(pairs[i].Keys)) {
+                toRemove.Add(i);
+            }
+        }
+
+        foreach (var i in toRemove) {
+            pairs.RemoveAt(i);
+        }
     }
 
     IEnumerator IEnumerable.GetEnumerator() {
         return GetEnumerator();
     }
-    
+
     public IEnumerator<Pair> GetEnumerator() {
         return pairs.GetEnumerator();
     }
@@ -44,8 +58,12 @@ public class MultiKeyDictionary<TKey, TValue> : IEnumerable<MultiKeyDictionary<T
                 if (!keyComparer.Equals(Keys[i], other[i]))
                     return false;
             }
-            
+
             return true;
+        }
+
+        public bool ContainsKey(TKey key) {
+            return Keys.Contains(key);
         }
     }
 }

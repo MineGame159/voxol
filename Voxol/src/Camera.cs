@@ -57,7 +57,7 @@ public class Camera {
         if (Input.IsKeyDown(Key.ShiftLeft)) Pos.Y -= speed;
     }
 
-    public CameraData GetData(int width, int height) {
+    public CameraData GetData(uint width, uint height) {
         return new CameraData(Pos, Pos + GetDirection(true), 70, (float) width / height);
     }
 }

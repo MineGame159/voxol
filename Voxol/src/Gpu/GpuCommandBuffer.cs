@@ -66,7 +66,7 @@ public class GpuCommandBuffer {
                 layerCount: 1
             ),
             imageOffset: new Offset3D(0, 0, 0),
-            imageExtent: new Extent3D(dst.Width, dst.Height, 1)
+            imageExtent: new Extent3D(dst.Size.X, dst.Size.Y, 1)
         ));
     }
 
@@ -79,7 +79,7 @@ public class GpuCommandBuffer {
                 ),
                 SrcOffsets = new ImageBlit.SrcOffsetsBuffer {
                     Element0 = new Offset3D(),
-                    Element1 = new Offset3D((int) src.Width, (int) src.Height, 1)
+                    Element1 = new Offset3D((int) src.Size.X, (int) src.Size.Y, 1)
                 },
                 DstSubresource = new ImageSubresourceLayers(
                     ImageAspectFlags.ColorBit,
@@ -87,7 +87,7 @@ public class GpuCommandBuffer {
                 ),
                 DstOffsets = new ImageBlit.DstOffsetsBuffer {
                     Element0 = new Offset3D(),
-                    Element1 = new Offset3D((int) dst.Width, (int) dst.Height, 1)
+                    Element1 = new Offset3D((int) dst.Size.X, (int) dst.Size.Y, 1)
                 }
             }, filter);
     }
@@ -148,7 +148,7 @@ public class GpuCommandBuffer {
         Ctx.Vk.CmdBeginRendering(Handle, new RenderingInfo(
             renderArea: new Rect2D(
                 new Offset2D(0, 0),
-                new Extent2D(colorAttachments[0].Image.Width, colorAttachments[0].Image.Height)
+                new Extent2D(colorAttachments[0].Image.Size.X, colorAttachments[0].Image.Size.Y)
             ),
             layerCount: 1,
             colorAttachmentCount: (uint) colorAttachmentsRaw.Length,
@@ -158,8 +158,8 @@ public class GpuCommandBuffer {
         Ctx.Vk.CmdSetViewport(Handle, 0, 1, new Viewport(
             x: 0,
             y: 0,
-            width: colorAttachments[0].Image.Width,
-            height: colorAttachments[0].Image.Height
+            width: colorAttachments[0].Image.Size.X,
+            height: colorAttachments[0].Image.Size.Y
         ));
     }
 

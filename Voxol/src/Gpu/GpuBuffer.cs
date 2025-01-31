@@ -4,18 +4,14 @@ using Buffer = Silk.NET.Vulkan.Buffer;
 
 namespace Voxol.Gpu;
 
-public class GpuBuffer : IDescriptor, IDisposable {
-    public readonly GpuContext Ctx;
-
+public class GpuBuffer : GpuResource, IDescriptor {
     public readonly Buffer Handle;
     public readonly ulong Size;
     public readonly BufferUsageFlags Usage;
 
     private readonly Allocation allocation;
 
-    public GpuBuffer(GpuContext ctx, Buffer handle, ulong size, BufferUsageFlags usage, Allocation allocation) {
-        Ctx = ctx;
-
+    public GpuBuffer(GpuContext ctx, Buffer handle, ulong size, BufferUsageFlags usage, Allocation allocation) : base(ctx) {
         Handle = handle;
         Size = size;
         Usage = usage;
@@ -30,6 +26,10 @@ public class GpuBuffer : IDescriptor, IDisposable {
 
             throw new Exception($"Buffer with {Usage} usage cannot be a descriptor");
         }
+    }
+
+    public bool Equals(IDescriptor? other) {
+        return ReferenceEquals(this, other);
     }
 
     public unsafe ulong DeviceAddress => Ctx.Vk.GetBufferDeviceAddress(Ctx.Device, new BufferDeviceAddressInfo(buffer: Handle));
@@ -54,9 +54,13 @@ public class GpuBuffer : IDescriptor, IDisposable {
         Unmap();
     }
 
-    public unsafe void Dispose() {
+    public override unsafe void Dispose() {
+        Ctx.OnDestroyResource(this);
+
         Ctx.Vk.DestroyBuffer(Ctx.Device, Handle, null);
         Ctx.Allocator.FreeMemory(allocation);
+        
+        GC.SuppressFinalize(this);
     }
     
     public static implicit operator Buffer(GpuBuffer buffer) => buffer.Handle;

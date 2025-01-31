@@ -80,7 +80,7 @@ void RayGen() {
         }
     }
 
-    image[int2(pos.x, size.y - pos.y)] = color;
+    image[int2(pos.x, size.y - pos.y - 1)] = color;
 }
 
 [shader("miss")]

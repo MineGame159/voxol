@@ -1,14 +1,12 @@
+using Silk.NET.Maths;
 using Silk.NET.Vulkan;
 using VMASharp;
 
 namespace Voxol.Gpu;
 
-public class GpuImage : IDescriptor, IDisposable {
-    public readonly GpuContext Ctx;
-
+public class GpuImage : GpuResource, IDescriptor {
     public readonly Image Handle;
-    public readonly uint Width;
-    public readonly uint Height;
+    public readonly Vector2D<uint> Size;
     public readonly ImageUsageFlags Usage;
     public readonly Format Format;
 
@@ -18,12 +16,9 @@ public class GpuImage : IDescriptor, IDisposable {
 
     public ImageLayout Layout;
     
-    public GpuImage(GpuContext ctx, Image handle, uint width, uint height, ImageUsageFlags usage, Format format, Allocation? allocation) {
-        Ctx = ctx;
-
+    public GpuImage(GpuContext ctx, Image handle, Vector2D<uint> size, ImageUsageFlags usage, Format format, Allocation? allocation) : base(ctx) {
         Handle = handle;
-        Width = width;
-        Height = height;
+        Size = size;
         Usage = usage;
         Format = format;
 
@@ -48,13 +43,21 @@ public class GpuImage : IDescriptor, IDisposable {
 
     public DescriptorType DescriptorType => DescriptorType.StorageImage;
 
-    public unsafe void Dispose() {
+    public bool Equals(IDescriptor? other) {
+        return ReferenceEquals(this, other);
+    }
+
+    public override unsafe void Dispose() {
+        Ctx.OnDestroyResource(this);
+        
         Ctx.Vk.DestroyImageView(Ctx.Device, View, null);
         
         if (allocation != null) {
             Ctx.Vk.DestroyImage(Ctx.Device, Handle, null);
             Ctx.Allocator.FreeMemory(allocation);
         }
+        
+        GC.SuppressFinalize(this);
     }
 
     public static implicit operator Image(GpuImage image) => image.Handle;
@@ -63,4 +66,8 @@ public class GpuImage : IDescriptor, IDisposable {
 
 public readonly record struct GpuSamplerImage(GpuImage Image, Sampler Sampler) : IDescriptor {
     public DescriptorType DescriptorType => DescriptorType.CombinedImageSampler;
+
+    public bool Equals(IDescriptor? other) {
+        return Equals(this, other);
+    }
 }
