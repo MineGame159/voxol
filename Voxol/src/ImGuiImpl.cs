@@ -37,7 +37,10 @@ public static class ImGuiImpl {
         
         io.BackendFlags |= ImGuiBackendFlags.HasMouseCursors;
 
-        Input.Ctx.Mice[0].MouseMove += (_, pos) => ImGui.GetIO().AddMousePosEvent(pos.X, pos.Y);
+        Input.Ctx.Mice[0].MouseMove += (_, pos) => {
+            pos *= ImGuiImpl.ctx.Swapchain.FramebufferScale;
+            ImGui.GetIO().AddMousePosEvent(pos.X, pos.Y);
+        };
         Input.Ctx.Mice[0].MouseDown += (_, button) => ImGui.GetIO().AddMouseButtonEvent((int) button, true);
         Input.Ctx.Mice[0].MouseUp += (_, button) => ImGui.GetIO().AddMouseButtonEvent((int) button, false);
         Input.Ctx.Mice[0].Scroll += (_, wheel) => ImGui.GetIO().AddMouseWheelEvent(wheel.X, wheel.Y);
@@ -72,8 +75,8 @@ public static class ImGuiImpl {
     public static void BeginFrame(float delta) {
         var io = ImGui.GetIO();
 
-        io.DisplaySize = ctx.Swapchain.WindowSize.As<float>().ToSystem();
-        io.DisplayFramebufferScale = ctx.Swapchain.FramebufferSize.As<float>().ToSystem() / io.DisplaySize;
+        io.DisplaySize = ctx.Swapchain.FramebufferSize.As<float>().ToSystem();
+        io.DisplayFramebufferScale = new Vector2(1, 1);
         io.DeltaTime = delta;
         
         UpdateMouseCursor();

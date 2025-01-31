@@ -1,3 +1,4 @@
+using System.Numerics;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
@@ -19,6 +20,7 @@ public class GpuSwapchain {
 
     public Vector2D<uint> WindowSize { get; private set; }
     public Vector2D<uint> FramebufferSize => Images[0].Size;
+    public Vector2 FramebufferScale => FramebufferSize.As<float>().ToSystem() / WindowSize.As<float>().ToSystem();
 
     public GpuSwapchain(GpuContext ctx, IWindow window) {
         this.ctx = ctx;
@@ -61,6 +63,10 @@ public class GpuSwapchain {
             pSwapchains: &handle,
             pImageIndices: (uint*) &index
         ));
+
+        if (window.FramebufferSize.As<uint>() != FramebufferSize) {
+            Recreate(true);
+        }
     }
 
     private unsafe void Recreate(bool resize) {
