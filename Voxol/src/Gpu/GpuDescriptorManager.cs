@@ -49,21 +49,17 @@ public class GpuDescriptorManager {
 
     public unsafe DescriptorSetLayout GetLayout(ReadOnlySpan<DescriptorType?> types) {
         if (!layouts.TryGetValue(types, out var layout)) {
-            Span<DescriptorSetLayoutBinding> bindings = stackalloc DescriptorSetLayoutBinding[Utils.NonNullCount(types)];
-            var i = 0;
+            Span<DescriptorSetLayoutBinding> bindings = stackalloc DescriptorSetLayoutBinding[types.Length];
 
-            foreach (var type in types) {
-                if (type == null)
-                    continue;
+            for (var i = 0; i < types.Length; i++) {
+                var type = types[i];
 
                 bindings[i] = new DescriptorSetLayoutBinding(
                     binding: (uint) i,
-                    descriptorType: type.Value,
-                    descriptorCount: 1,
+                    descriptorType: type ?? 0,
+                    descriptorCount: type == null ? 0u : 1u,
                     stageFlags: ShaderStageFlags.All
                 );
-
-                i++;
             }
 
             Utils.Wrap(ctx.Vk.CreateDescriptorSetLayout(ctx.Device, new DescriptorSetLayoutCreateInfo(

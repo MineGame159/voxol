@@ -1,11 +1,14 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Silk.NET.Maths;
 using Silk.NET.Vulkan;
 
 namespace Voxol;
 
 public static class Utils {
-    public static unsafe T* AsPtr<T>(ReadOnlySpan<T> span) where T : unmanaged => (T*) Unsafe.AsPointer(ref Unsafe.AsRef(in span.GetPinnableReference()));
+    public static unsafe T* AsPtr<T>(ReadOnlySpan<T> span) where T : unmanaged =>
+        (T*) Unsafe.AsPointer(ref Unsafe.AsRef(in span.GetPinnableReference()));
+
     public static unsafe T* AsPtr<T>(Span<T> span) where T : unmanaged => (T*) Unsafe.AsPointer(ref span.GetPinnableReference());
     public static unsafe T* AsPtr<T>(T[] array) where T : unmanaged => (T*) Unsafe.AsPointer(ref array.AsSpan().GetPinnableReference());
 
@@ -20,10 +23,10 @@ public static class Utils {
             if (item != null)
                 count++;
         }
-        
+
         return count;
     }
-    
+
     public static float DegToRad(float deg) => deg * (MathF.PI / 180);
     public static float RadToDeg(float rad) => rad * (180 / MathF.PI);
 
@@ -35,7 +38,7 @@ public static class Utils {
     public static byte[] ReadAllBytes(Stream stream) {
         using var ms = new MemoryStream();
         stream.CopyTo(ms);
-        
+
         return ms.ToArray();
     }
 
@@ -43,8 +46,15 @@ public static class Utils {
         if (bytes / 1024.0 < 1) return $"{bytes} b";
         if (bytes / 1024.0 / 1024.0 < 1) return $"{bytes / 1024.0:F1} kB";
         if (bytes / 1024.0 / 1024.0 / 1024.0 < 1) return $"{bytes / 1024.0 / 1024.0:F1} mB";
-        
+
         return $"{bytes / 1024.0 / 1024.0 / 1024.0:F1} gB";
+    }
+
+    public static string FormatDuration(TimeSpan duration) {
+        if (duration.TotalMilliseconds < 1) return $"{duration.TotalNanoseconds:F1} ns";
+        if (duration.TotalSeconds < 1) return $"{duration.TotalMilliseconds:F1} ms";
+
+        return $"{duration.TotalSeconds:F1} s";
     }
 
     public static unsafe QueueIndices GetQueueIndices(Vk vk, PhysicalDevice physicalDevice) {
@@ -89,5 +99,18 @@ public static class TransformMatrixKHRMethods {
         for (var i = 0; i < 12; i++) {
             transform.Matrix[i] = matrix[i % 4, i / 4];
         }
+    }
+}
+
+public static class Vector4DMethods {
+    public static Vector3D<T> To3<T>(this Vector4D<T> v) where T : unmanaged, IFormattable, IEquatable<T>, IComparable<T> {
+        return new Vector3D<T>(v.X, v.Y, v.Z);
+    }
+}
+
+public static class Vector3DMethods {
+    public static Vector3D<T> Mod<T>(this Vector3D<T> v, T mod)
+        where T : unmanaged, IFormattable, IEquatable<T>, IComparable<T>, IModulusOperators<T, T, T> {
+        return new Vector3D<T>(v.X % mod, v.Y % mod, v.Z % mod);
     }
 }

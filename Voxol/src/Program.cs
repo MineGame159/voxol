@@ -11,12 +11,60 @@ using Voxol.Gpu;
 namespace Voxol;
 
 [StructLayout(LayoutKind.Sequential)]
-public struct Voxel {
-    public byte X, Y, Z;
+public struct Chunk {
+    public uint X, Y, Z;
+    public uint BrickBase;
+    public uint BrickCount;
+
+    public Vector3D<uint> Pos {
+        get => new(X, Y, Z);
+        set {
+            X = value.X;
+            Y = value.Y;
+            Z = value.Z;
+        }
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct Brick {
+    public byte MinX, MinY, MinZ;
     private byte _0;
 
-    public byte R, G, B;
+    private byte MaxX, MaxY, MaxZ;
     private byte _1;
+
+    public uint VoxelBase;
+    
+    public unsafe fixed uint Mask[16];
+
+    public Vector3D<byte> Min {
+        get => new(MinX, MinY, MinZ);
+        set {
+            MinX = value.X;
+            MinY = value.Y;
+            MinZ = value.Z;
+        }
+    }
+
+    public Vector3D<byte> Max {
+        get => new(MaxX, MaxY, MaxZ);
+        set {
+            MaxX = value.X;
+            MaxY = value.Y;
+            MaxZ = value.Z;
+        }
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct Voxel {
+    public Vector3D<byte> Color;
+}
+
+public struct ChunkVoxel {
+    public Vector3D<byte> Pos;
+    public Vector3D<byte> Color;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -26,123 +74,47 @@ public struct Uniforms {
 }
 
 internal class Program : Application {
-    private static GpuRayTracePipeline pipeline = null!;
-    private static Sbt sbt;
-    
-    private static GpuBuffer uniformBuffer = null!;
-    private static GpuAccelStruct topAccelStruct = null!;
-    private static GpuBuffer chunkVoxelIndexBuffer = null!;
-    private static GpuBuffer voxelBuffer = null!;
-    private static GpuImage? image;
+    private GpuRayTracePipeline pipeline = null!;
+    private Sbt sbt;
 
-    private static Camera camera = null!;
-    private static Uniforms uniforms;
+    private GpuBuffer uniformBuffer = null!;
+    private GpuAccelStruct topAccelStruct = null!;
+    private GpuBuffer chunkBuffer = null!;
+    private GpuBuffer brickBuffer = null!;
+    private GpuBuffer voxelBuffer = null!;
+    private GpuImage? image;
 
-    private static readonly Stat<float> fps = new(60);
-    private static readonly Stat<double> cpuTime = new(60);
-    private static readonly Stat<double> gpuTime = new(60);
+    private ulong accelStructBytes;
 
-    private static GpuQuery? frameQuery;
+    private Camera camera = null!;
+    private Uniforms uniforms;
 
-    private static uint chunkCount;
-    private static ulong accelStructBytes;
-    private static ulong voxelBytes;
+    private readonly Stat<float> fps = new(60);
+    private readonly Stat<double> cpuTime = new(60);
+    private readonly Stat<double> gpuTime = new(60);
+
+    private GpuQuery? frameQuery;
 
     protected override void Init() {
         Resize(Ctx.Swapchain);
 
-        var vox = new Voxelizer();
-        vox.Resolution = 256;
+        var chunkVoxels = LoadChunkVoxels("scenes/fantasy_game_inn.glb", 256);
+        var (chunks, bricks, voxels) = ConvertChunkVoxels(chunkVoxels);
 
-        var loader = new GltfLoader();
-        loader.Load("scenes/fantasy_game_inn.glb");
-        vox.InputCallback = loader.GetNextTriangle;
+        CreateAccelStruct(chunks, bricks);
 
-        Dictionary<Vector3D<uint>, List<Voxel>> chunks = [];
-
-        vox.OutputCallback = voxels => {
-            foreach (var voxel in voxels) {
-                var chunkPos = voxel.Pos / 256;
-
-                if (!chunks.TryGetValue(chunkPos, out var chunk)) {
-                    chunk = [];
-                    chunks[chunkPos] = chunk;
-                }
-
-                chunk.Add(new Voxel {
-                    X = (byte) (voxel.Pos.X % 256),
-                    Y = (byte) (voxel.Pos.Y % 256),
-                    Z = (byte) (voxel.Pos.Z % 256),
-                    R = voxel.Color.X,
-                    G = voxel.Color.Y,
-                    B = voxel.Color.Z
-                });
-            }
-
-            return true;
-        };
-
-        var sw = Stopwatch.StartNew();
-        vox.Voxelize();
-        Console.WriteLine("Voxelized in " + sw.Elapsed);
-
-        loader.Dispose();
-        vox.Dispose();
-
-        var chunkInstances = new List<AccelerationStructureInstanceKHR>(chunks.Count);
-        var chunkVoxelIndices = new List<uint>(chunks.Count);
-        var voxelI = 0;
-
-        var scratchBuffer = default(GpuBuffer?);
-        var aabbs = new List<Box3D<float>>();
-
-        chunkCount = (uint) chunks.Count;
-
-        foreach (var (chunkPos, chunk) in chunks) {
-            aabbs.EnsureCapacity(chunk.Count);
-
-            foreach (var pos in chunk) {
-                aabbs.Add(new Box3D<float>(pos.X, pos.Y, pos.Z, pos.X + 1, pos.Y + 1, pos.Z + 1));
-            }
-
-            var accelStruct = Ctx.CreateAccelStruct(CollectionsMarshal.AsSpan(aabbs), true, ref scratchBuffer);
-            aabbs.Clear();
-
-            accelStructBytes += accelStruct.Buffer.Size;
-
-            var transform = new TransformMatrixKHR();
-            transform.Load(Matrix4x4.CreateTranslation(chunkPos.As<float>().ToSystem() * 256));
-
-            chunkInstances.Add(new AccelerationStructureInstanceKHR(
-                transform: transform,
-                mask: 0xFF,
-                accelerationStructureReference: accelStruct.DeviceAddress,
-                instanceCustomIndex: (uint) chunkInstances.Count
-            ));
-
-            chunkVoxelIndices.Add((uint) voxelI);
-
-            voxelI += chunk.Count;
-        }
-
-        var voxels = new Voxel[chunks.Sum(pair => pair.Value.Count)];
-        voxelI = 0;
-
-        foreach (var chunk in chunks.Values) {
-            foreach (var voxel in chunk) {
-                voxels[voxelI++] = voxel;
-            }
-        }
-
-        chunkVoxelIndexBuffer = Ctx.CreateStaticBuffer(CollectionsMarshal.AsSpan(chunkVoxelIndices), BufferUsageFlags.StorageBufferBit);
-        voxelBuffer = Ctx.CreateStaticBuffer(voxels.AsSpan(), BufferUsageFlags.StorageBufferBit);
-
-        voxelBytes = voxelBuffer.Size;
-
-        topAccelStruct = Ctx.CreateAccelStruct(CollectionsMarshal.AsSpan(chunkInstances), false, ref scratchBuffer);
-        scratchBuffer?.Dispose();
-
-        accelStructBytes += topAccelStruct.Buffer.Size;
+        chunkBuffer = Ctx.CreateStaticBuffer(
+            CollectionsMarshal.AsSpan(chunks),
+            BufferUsageFlags.StorageBufferBit
+        );
+        brickBuffer = Ctx.CreateStaticBuffer(
+            CollectionsMarshal.AsSpan(bricks),
+            BufferUsageFlags.StorageBufferBit
+        );
+        voxelBuffer = Ctx.CreateStaticBuffer(
+            CollectionsMarshal.AsSpan(voxels),
+            BufferUsageFlags.StorageBufferBit
+        );
 
         pipeline = Ctx.Pipelines.Create(new GpuRayTracePipelineOptions(
             [
@@ -201,9 +173,163 @@ internal class Program : Application {
         style.Alpha = 0.85f;
     }
 
+    private static Dictionary<Vector3D<uint>, List<ChunkVoxel>> LoadChunkVoxels(string path, uint resolution) {
+        var vox = new Voxelizer();
+        vox.Resolution = resolution;
+
+        var loader = new GltfLoader();
+        loader.Load(path);
+        vox.InputCallback = loader.GetNextTriangle;
+
+        var chunks = new Dictionary<Vector3D<uint>, List<ChunkVoxel>>();
+
+        vox.OutputCallback = voxels => {
+            foreach (var voxel in voxels) {
+                var chunkPos = voxel.Pos / 256;
+
+                if (!chunks.TryGetValue(chunkPos, out var chunk)) {
+                    chunk = [];
+                    chunks[chunkPos] = chunk;
+                }
+
+                chunk.Add(new ChunkVoxel {
+                    Pos = voxel.Pos.Mod(256u).As<byte>(),
+                    Color = voxel.Color.To3()
+                });
+            }
+
+            return true;
+        };
+
+        var sw = Stopwatch.StartNew();
+        vox.Voxelize();
+        Console.WriteLine("Voxelized in " + Utils.FormatDuration(sw.Elapsed));
+
+        loader.Dispose();
+        vox.Dispose();
+
+        return chunks;
+    }
+
+    private static (List<Chunk>, List<Brick>, List<Voxel>) ConvertChunkVoxels(Dictionary<Vector3D<uint>, List<ChunkVoxel>> chunkVoxels) {
+        var sw = Stopwatch.StartNew();
+        
+        var chunks = new List<Chunk>(chunkVoxels.Count);
+        var bricks = new List<Brick>();
+        var voxels = new List<Voxel>();
+
+        var chunkBricks = new int[32 * 32 * 32];
+
+        foreach (var (chunkPos, chunkVoxels2) in chunkVoxels) {
+            // Chunk
+
+            chunks.Add(new Chunk {
+                Pos = chunkPos,
+                BrickBase = (uint) bricks.Count,
+                BrickCount = 0
+            });
+
+            ref var chunk = ref CollectionsMarshal.AsSpan(chunks)[chunks.Count - 1];
+
+            // Voxels
+
+            Array.Fill(chunkBricks, -1);
+
+            foreach (var chunkVoxel in chunkVoxels2) {
+                // Brick
+
+                var brickPos = chunkVoxel.Pos / 8;
+                ref var brickI = ref chunkBricks[brickPos.X + 32 * (brickPos.Y + 32 * brickPos.Z)];
+
+                if (brickI == -1) {
+                    chunk.BrickCount++;
+
+                    brickI = bricks.Count;
+
+                    bricks.Add(new Brick {
+                        Min = new Vector3D<byte>(byte.MaxValue),
+                        Max = new Vector3D<byte>(byte.MinValue),
+                        //Min = brickPos * 8,
+                        //Max = brickPos * 8 + new Vector3D<byte>(7),
+                        VoxelBase = (uint) voxels.Count
+                    });
+
+                    voxels.EnsureCapacity(voxels.Count + 8 * 8 * 8);
+                    voxels.AddRange(Enumerable.Repeat(new Voxel(), 8 * 8 * 8));
+                }
+
+                ref var brick = ref CollectionsMarshal.AsSpan(bricks)[brickI];
+
+                // Voxel
+                
+                SetVoxel(ref brick, chunkVoxel.Pos, chunkVoxel.Color);
+            }
+        }
+        
+        Console.WriteLine("Converted chunks in " + Utils.FormatDuration(sw.Elapsed));
+
+        return (chunks, bricks, voxels);
+
+        void SetVoxel(ref Brick brick, Vector3D<byte> pos, Vector3D<byte> color) {
+            brick.Min = Vector3D.Min(brick.Min, pos);
+            brick.Max = Vector3D.Max(brick.Max, pos);
+
+            var voxelPos = pos.Mod((byte) 8);
+            var voxelI = voxelPos.X + 8 * (voxelPos.Y + 8 * voxelPos.Z);
+
+            unsafe {
+                brick.Mask[voxelI / 32] |= 1u << (voxelI % 32);
+            }
+
+            CollectionsMarshal.AsSpan(voxels)[(int) brick.VoxelBase + voxelI].Color = color;
+        }
+    }
+
+    private void CreateAccelStruct(List<Chunk> chunks, List<Brick> bricks) {
+        var sw = Stopwatch.StartNew();
+        
+        var chunkInstances = new List<AccelerationStructureInstanceKHR>(chunks.Count);
+
+        var scratchBuffer = default(GpuBuffer?);
+        var aabbs = new List<Box3D<float>>();
+
+        foreach (var chunk in chunks) {
+            aabbs.EnsureCapacity((int) chunk.BrickCount);
+
+            for (var i = 0u; i < chunk.BrickCount; i++) {
+                var brick = bricks[(int) (chunk.BrickBase + i)];
+                aabbs.Add(new Box3D<float>(brick.Min.As<float>(), brick.Max.As<float>() + Vector3D<float>.One));
+            }
+
+            var accelStruct = Ctx.CreateAccelStruct(CollectionsMarshal.AsSpan(aabbs), true, ref scratchBuffer);
+            aabbs.Clear();
+
+            accelStructBytes += accelStruct.Buffer.Size;
+
+            var transform = new TransformMatrixKHR();
+            
+            // ReSharper disable once PossiblyImpureMethodCallOnReadonlyVariable
+            transform.Load(Matrix4x4.CreateTranslation(chunk.Pos.As<float>().ToSystem() * 256));
+
+            chunkInstances.Add(new AccelerationStructureInstanceKHR(
+                transform: transform,
+                mask: 0xFF,
+                accelerationStructureReference: accelStruct.DeviceAddress,
+                instanceCustomIndex: (uint) chunkInstances.Count
+            ));
+        }
+
+        topAccelStruct = Ctx.CreateAccelStruct(CollectionsMarshal.AsSpan(chunkInstances), false, ref scratchBuffer);
+        scratchBuffer?.Dispose();
+
+        accelStructBytes += topAccelStruct.Buffer.Size;
+        
+        Console.WriteLine("Created acceleration structures in " + Utils.FormatDuration(sw.Elapsed));
+    }
+
     private void Resize(GpuSwapchain swapchain) {
         image?.Dispose();
-        
+
         image = Ctx.CreateImage(
             swapchain.FramebufferSize,
             ImageUsageFlags.StorageBit | ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
@@ -223,7 +349,7 @@ internal class Program : Application {
         // Uniforms
 
         camera.Move(delta);
-        
+
         uniforms.Camera = camera.GetData(Ctx.Swapchain.FramebufferSize.X, Ctx.Swapchain.FramebufferSize.Y);
         uniformBuffer.Write(ref uniforms);
 
@@ -287,7 +413,8 @@ internal class Program : Application {
         commandBuffer.BindDescriptorSet(0, [
             uniformBuffer,
             topAccelStruct,
-            chunkVoxelIndexBuffer,
+            chunkBuffer,
+            brickBuffer,
             voxelBuffer,
             image
         ]);
@@ -309,10 +436,12 @@ internal class Program : Application {
 
             ImGui.Separator();
 
-            ImGui.Text($"Chunks: {chunkCount}");
+            ImGui.Text($"Chunks: {chunkBuffer.Size / Utils.SizeOf<Chunk>()}");
             ImGui.Text($"   Accel Structs: {Utils.FormatBytes(accelStructBytes)}");
-            ImGui.Text($"   Voxels: {Utils.FormatBytes(voxelBytes)}");
-            
+            ImGui.Text($"   Chunks: {Utils.FormatBytes(chunkBuffer.Size)}");
+            ImGui.Text($"   Bricks: {Utils.FormatBytes(brickBuffer.Size)}");
+            ImGui.Text($"   Voxels: {Utils.FormatBytes(voxelBuffer.Size)}");
+
             ImGui.Separator();
 
             ImGui.Checkbox("Shadows", ref uniforms.Shadows);

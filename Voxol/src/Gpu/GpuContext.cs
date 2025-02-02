@@ -483,7 +483,9 @@ public class GpuContext {
         var features12 = new PhysicalDeviceVulkan12Features(
             pNext: &features13,
             hostQueryReset: true,
-            bufferDeviceAddress: true
+            bufferDeviceAddress: true,
+            shaderInt8: true,
+            storageBuffer8BitAccess: true
         );
 
         var features = new PhysicalDeviceFeatures2(
