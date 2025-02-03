@@ -32,6 +32,7 @@ public class GpuContext {
     public readonly GpuPipelineManager Pipelines;
     public readonly GpuCommandPool CommandPool;
     public readonly GpuQueryManager Queries;
+    public readonly FrameAllocator FrameAllocator;
 
     private readonly Fence runFence;
 
@@ -70,6 +71,7 @@ public class GpuContext {
         Pipelines = new GpuPipelineManager(this);
         CommandPool = new GpuCommandPool(this);
         Queries = new GpuQueryManager(this);
+        FrameAllocator = new FrameAllocator(this);
 
         unsafe {
             Vk.CreateFence(Device, new FenceCreateInfo(pNext: null), null, out runFence);
@@ -78,6 +80,7 @@ public class GpuContext {
 
     internal void NewFrame() {
         Queries.NewFrame();
+        FrameAllocator.NewFrame();
     }
 
     internal void OnDestroyResource(GpuResource resource) {

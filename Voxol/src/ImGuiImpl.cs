@@ -23,9 +23,6 @@ public static class ImGuiImpl {
     private static GpuImage fontImage = null!;
     private static Sampler sampler;
 
-    private static GpuBuffer? vertexBuffer;
-    private static GpuBuffer? indexBuffer;
-
     public static void Init(GpuContext ctx) {
         ImGuiImpl.ctx = ctx;
         
@@ -145,13 +142,11 @@ public static class ImGuiImpl {
         };
 
         uniformBuffer.Write(ref uniforms);
-
-        UploadBuffers(commandBuffer.Ctx, data);
+        
         commandBuffer.BeginRenderPass(new Attachment(image, AttachmentLoadOp.Load, AttachmentStoreOp.Store, null));
 
         commandBuffer.BindPipeline(pipeline!);
-        commandBuffer.BindVertexBuffer(vertexBuffer!);
-        commandBuffer.BindIndexBuffer(indexBuffer!, IndexType.Uint16);
+        UploadBuffers(commandBuffer, data);
         commandBuffer.BindDescriptorSet(0, [uniformBuffer, new GpuSamplerImage(fontImage, sampler)]);
 
         var clipOff = data.DisplayPos;
@@ -192,31 +187,13 @@ public static class ImGuiImpl {
         commandBuffer.EndRenderPass();
     }
 
-    private static void UploadBuffers(GpuContext ctx, ImDrawDataPtr data) {
+    private static void UploadBuffers(GpuCommandBuffer commandBuffer, ImDrawDataPtr data) {
         var vertexSize = (ulong) data.TotalVtxCount * Utils.SizeOf<ImDrawVert>();
-        var indexSize = (ulong) data.TotalIdxCount * Utils.SizeOf<ushort>();
-
-        if (vertexBuffer == null || vertexBuffer.Size < vertexSize) {
-            vertexBuffer?.Dispose();
-
-            vertexBuffer = ctx.CreateBuffer(
-                vertexSize,
-                BufferUsageFlags.VertexBufferBit,
-                MemoryUsage.CPU_To_GPU
-            );
-        }
-
-        if (indexBuffer == null || indexBuffer.Size < indexSize) {
-            indexBuffer?.Dispose();
-
-            indexBuffer = ctx.CreateBuffer(
-                indexSize,
-                BufferUsageFlags.IndexBufferBit,
-                MemoryUsage.CPU_To_GPU
-            );
-        }
-
+        var vertexBuffer = commandBuffer.Ctx.FrameAllocator.Allocate(BufferUsageFlags.VertexBufferBit, vertexSize);
         var vertices = vertexBuffer.Map<ImDrawVert>();
+
+        var indexSize = (ulong) data.TotalIdxCount * Utils.SizeOf<ushort>();
+        var indexBuffer = commandBuffer.Ctx.FrameAllocator.Allocate(BufferUsageFlags.IndexBufferBit, indexSize);
         var indices = indexBuffer.Map<ushort>();
 
         for (var i = 0; i < data.CmdListsCount; i++) {
@@ -235,7 +212,10 @@ public static class ImGuiImpl {
         }
 
         vertexBuffer.Unmap();
+        commandBuffer.BindVertexBuffer(vertexBuffer);
+        
         indexBuffer.Unmap();
+        commandBuffer.BindIndexBuffer(indexBuffer, IndexType.Uint16);
     }
 
     private static void CreatePipeline(GpuContext ctx, Format format) {

@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
 
@@ -112,5 +113,11 @@ public static class Vector3DMethods {
     public static Vector3D<T> Mod<T>(this Vector3D<T> v, T mod)
         where T : unmanaged, IFormattable, IEquatable<T>, IComparable<T>, IModulusOperators<T, T, T> {
         return new Vector3D<T>(v.X % mod, v.Y % mod, v.Z % mod);
+    }
+}
+
+public static class ListMethods {
+    public static ref T Ref<T>(this List<T> list, int i) {
+        return ref CollectionsMarshal.AsSpan(list)[i];
     }
 }

@@ -69,4 +69,22 @@ public class GpuBuffer : GpuResource, IDescriptor {
     public static implicit operator GpuSubBuffer(GpuBuffer buffer) => new(buffer, 0, buffer.Size);
 }
 
-public readonly record struct GpuSubBuffer(GpuBuffer Buffer, ulong Offset, ulong Size);
+public readonly record struct GpuSubBuffer(GpuBuffer Buffer, ulong Offset, ulong Size) {
+    public Span<T> Map<T>() where T : unmanaged {
+        return Buffer.Map<T>().Slice((int) Offset, (int) Size);
+    }
+
+    public void Unmap() {
+        Buffer.Unmap();
+    }
+    
+    public void Write<T>(ReadOnlySpan<T> data) where T : unmanaged {
+        data.CopyTo(Map<T>());
+        Unmap();
+    }
+
+    public void Write<T>(ref T data) where T : unmanaged {
+        new ReadOnlySpan<T>(ref data).CopyTo(Map<T>());
+        Unmap();
+    }
+}
