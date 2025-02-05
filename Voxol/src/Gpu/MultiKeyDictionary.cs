@@ -4,8 +4,14 @@ using System.Diagnostics.CodeAnalysis;
 namespace Voxol.Gpu;
 
 public class MultiKeyDictionary<TKey, TValue> : IEnumerable<MultiKeyDictionary<TKey, TValue>.Pair> {
-    private readonly EqualityComparer<TKey> keyComparer = EqualityComparer<TKey>.Default;
+    private readonly EqualityComparer<TKey> keyComparer;
     private readonly List<Pair> pairs = [];
+
+    public MultiKeyDictionary(EqualityComparer<TKey> keyComparer) {
+        this.keyComparer = keyComparer;
+    }
+
+    public MultiKeyDictionary() : this(EqualityComparer<TKey>.Default) { }
 
     public TValue this[ReadOnlySpan<TKey> keys] {
         set => Add(keys, value);

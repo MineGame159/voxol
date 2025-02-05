@@ -5,7 +5,6 @@ using ImGuiNET;
 using Obj2Voxel;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
-using VMASharp;
 using Voxol.Gpu;
 
 namespace Voxol;
@@ -35,7 +34,7 @@ public struct Brick {
     private byte _1;
 
     public uint VoxelBase;
-    
+
     public unsafe fixed uint Mask[16];
 
     public Vector3D<byte> Min {
@@ -69,20 +68,35 @@ public struct ChunkVoxel {
 
 [StructLayout(LayoutKind.Sequential)]
 public struct Uniforms {
+    public Matrix4x4 Transform;
     public CameraData Camera;
     public bool Shadows;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ChunkOutlinesUniforms {
+    public Matrix4x4 Transform;
+    public Vector4 Color;
 }
 
 internal class Program : Application {
     private GpuRayTracePipeline pipeline = null!;
     private Sbt sbt;
 
-    private GpuBuffer uniformBuffer = null!;
     private GpuAccelStruct topAccelStruct = null!;
     private GpuBuffer chunkBuffer = null!;
     private GpuBuffer brickBuffer = null!;
     private GpuBuffer voxelBuffer = null!;
-    private GpuImage? image;
+    private GpuImage? colorImage;
+    private GpuImage? depthStorageImage;
+
+    private GpuGraphicsPipeline depthCopyPipeline = null!;
+    private Sampler depthCopySampler;
+    private GpuImage? depthImage;
+
+    private GpuGraphicsPipeline chunkOutlinesPipeline = null!;
+    private bool chunkOutlines;
+    private List<Box3D<float>> chunkBoxes = [];
 
     private ulong accelStructBytes;
 
@@ -102,6 +116,8 @@ internal class Program : Application {
         var (chunks, bricks, voxels) = ConvertChunkVoxels(chunkVoxels);
 
         CreateAccelStruct(chunks, bricks);
+
+        chunkBoxes = CreateChunkBoxes(chunks, bricks);
 
         chunkBuffer = Ctx.CreateStaticBuffer(
             CollectionsMarshal.AsSpan(chunks),
@@ -149,13 +165,37 @@ internal class Program : Application {
 
         sbt = sbtBuilder.Build();
 
-        uniformBuffer = Ctx.CreateBuffer(
-            Utils.SizeOf<Uniforms>(),
-            BufferUsageFlags.UniformBufferBit,
-            MemoryUsage.CPU_To_GPU
-        );
+        depthCopyPipeline = Ctx.Pipelines.Create(new GpuGraphicsPipelineOptions(
+            PrimitiveTopology.TriangleList,
+            GpuShaderModule.FromResource("Voxol.shaders.depth_copy.spv"),
+            GpuShaderModule.FromResource("Voxol.shaders.depth_copy.spv"),
+            new VertexFormat([]),
+            [],
+            new DepthAttachment(depthImage!.Format, CompareOp.Always, true)
+        ));
+
+        unsafe {
+            Ctx.Vk.CreateSampler(Ctx.Device, new SamplerCreateInfo(
+                magFilter: Filter.Nearest,
+                minFilter: Filter.Nearest
+            ), null, out depthCopySampler);
+        }
+
+        chunkOutlinesPipeline = Ctx.Pipelines.Create(new GpuGraphicsPipelineOptions(
+            PrimitiveTopology.LineList,
+            GpuShaderModule.FromResource("Voxol.shaders.chunk_outlines.spv"),
+            GpuShaderModule.FromResource("Voxol.shaders.chunk_outlines.spv"),
+            new VertexFormat([
+                new VertexAttribute(VertexAttributeType.Float, 3, false)
+            ]),
+            [
+                new ColorAttachment(colorImage!.Format, true)
+            ],
+            new DepthAttachment(depthImage!.Format, CompareOp.LessOrEqual, true)
+        ));
 
         camera = new Camera(new Vector3(), 0, 0);
+        camera.Pos.X = -256;
 
         uniforms.Shadows = true;
 
@@ -213,7 +253,7 @@ internal class Program : Application {
 
     private static (List<Chunk>, List<Brick>, List<Voxel>) ConvertChunkVoxels(Dictionary<Vector3D<uint>, List<ChunkVoxel>> chunkVoxels) {
         var sw = Stopwatch.StartNew();
-        
+
         var chunks = new List<Chunk>(chunkVoxels.Count);
         var bricks = new List<Brick>();
         var voxels = new List<Voxel>();
@@ -261,11 +301,11 @@ internal class Program : Application {
                 ref var brick = ref CollectionsMarshal.AsSpan(bricks)[brickI];
 
                 // Voxel
-                
+
                 SetVoxel(ref brick, chunkVoxel.Pos, chunkVoxel.Color);
             }
         }
-        
+
         Console.WriteLine("Converted chunks in " + Utils.FormatDuration(sw.Elapsed));
 
         return (chunks, bricks, voxels);
@@ -285,9 +325,35 @@ internal class Program : Application {
         }
     }
 
+    private static List<Box3D<float>> CreateChunkBoxes(List<Chunk> chunks, List<Brick> bricks) {
+        var chunkBoxes = new List<Box3D<float>>();
+
+        foreach (var chunk in chunks) {
+            var box = new Box3D<float>(
+                new Vector3D<float>(float.MaxValue),
+                new Vector3D<float>(float.MinValue)
+            );
+
+            for (var i = 0; i < chunk.BrickCount; i++) {
+                ref var brick = ref bricks.Ref((int) chunk.BrickBase + i);
+
+                box.Expand(new Box3D<float>(
+                    brick.Min.As<float>(),
+                    brick.Max.As<float>() + Vector3D<float>.One
+                ));
+            }
+
+            box = box.GetTranslated(chunk.Pos.As<float>() * 256);
+
+            chunkBoxes.Add(box);
+        }
+
+        return chunkBoxes;
+    }
+
     private void CreateAccelStruct(List<Chunk> chunks, List<Brick> bricks) {
         var sw = Stopwatch.StartNew();
-        
+
         var chunkInstances = new List<AccelerationStructureInstanceKHR>(chunks.Count);
 
         var scratchBuffer = default(GpuBuffer?);
@@ -307,7 +373,7 @@ internal class Program : Application {
             accelStructBytes += accelStruct.Buffer.Size;
 
             var transform = new TransformMatrixKHR();
-            
+
             // ReSharper disable once PossiblyImpureMethodCallOnReadonlyVariable
             transform.Load(Matrix4x4.CreateTranslation(chunk.Pos.As<float>().ToSystem() * 256));
 
@@ -323,17 +389,33 @@ internal class Program : Application {
         scratchBuffer?.Dispose();
 
         accelStructBytes += topAccelStruct.Buffer.Size;
-        
+
         Console.WriteLine("Created acceleration structures in " + Utils.FormatDuration(sw.Elapsed));
     }
 
     private void Resize(GpuSwapchain swapchain) {
-        image?.Dispose();
+        colorImage?.Dispose();
 
-        image = Ctx.CreateImage(
+        colorImage = Ctx.CreateImage(
             swapchain.FramebufferSize,
             ImageUsageFlags.StorageBit | ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
             Format.R8G8B8A8Unorm
+        );
+
+        depthStorageImage?.Dispose();
+
+        depthStorageImage = Ctx.CreateImage(
+            swapchain.FramebufferSize,
+            ImageUsageFlags.StorageBit | ImageUsageFlags.SampledBit,
+            Format.R32Sfloat
+        );
+
+        depthImage?.Dispose();
+
+        depthImage = Ctx.CreateImage(
+            swapchain.FramebufferSize,
+            ImageUsageFlags.DepthStencilAttachmentBit,
+            Format.D32Sfloat
         );
     }
 
@@ -346,52 +428,91 @@ internal class Program : Application {
         var sw = Stopwatch.StartNew();
         frameQuery = commandBuffer.BeginQuery(PipelineStageFlags.TopOfPipeBit);
 
-        // Uniforms
+        // Camera
 
         camera.Move(delta);
-
-        uniforms.Camera = camera.GetData(Ctx.Swapchain.FramebufferSize.X, Ctx.Swapchain.FramebufferSize.Y);
-        uniformBuffer.Write(ref uniforms);
 
         // Scene
 
         commandBuffer.TransitionImage(
-            image!,
+            colorImage!,
             ImageLayout.General,
             PipelineStageFlags.TopOfPipeBit, AccessFlags.None,
             PipelineStageFlags.RayTracingShaderBitKhr, AccessFlags.ShaderWriteBit
         );
 
         commandBuffer.TransitionImage(
-            output,
+            depthStorageImage!,
             ImageLayout.General,
             PipelineStageFlags.TopOfPipeBit, AccessFlags.None,
-            PipelineStageFlags.TransferBit, AccessFlags.TransferWriteBit
+            PipelineStageFlags.RayTracingShaderBitKhr, AccessFlags.ShaderWriteBit
         );
 
         RenderScene(commandBuffer);
 
         commandBuffer.TransitionImage(
-            image!,
-            ImageLayout.General,
+            colorImage!,
+            ImageLayout.ColorAttachmentOptimal,
             PipelineStageFlags.RayTracingShaderBitKhr, AccessFlags.ShaderWriteBit,
-            PipelineStageFlags.ColorAttachmentOutputBit, AccessFlags.ColorAttachmentWriteBit
+            PipelineStageFlags.ColorAttachmentOutputBit, AccessFlags.ColorAttachmentReadBit | AccessFlags.ColorAttachmentWriteBit
         );
+
+        if (chunkOutlines) {
+            commandBuffer.TransitionImage(
+                depthStorageImage!,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags.RayTracingShaderBitKhr, AccessFlags.ShaderWriteBit,
+                PipelineStageFlags.FragmentShaderBit, AccessFlags.ShaderReadBit
+            );
+
+            commandBuffer.TransitionImage(
+                depthImage!,
+                ImageLayout.DepthAttachmentOptimal,
+                PipelineStageFlags.TopOfPipeBit, AccessFlags.None,
+                PipelineStageFlags.EarlyFragmentTestsBit | PipelineStageFlags.LateFragmentTestsBit,
+                AccessFlags.DepthStencilAttachmentReadBit | AccessFlags.DepthStencilAttachmentWriteBit
+            );
+
+            commandBuffer.BeginGroup("Depth Copy");
+            commandBuffer.BeginRenderPass(new Attachment(depthImage!, AttachmentLoadOp.DontCare, AttachmentStoreOp.Store, null));
+            commandBuffer.BindPipeline(depthCopyPipeline);
+            commandBuffer.BindDescriptorSet(0, [new GpuSamplerImage(depthStorageImage!, depthCopySampler)]);
+            commandBuffer.Draw(3);
+            commandBuffer.EndRenderPass();
+            commandBuffer.EndGroup();
+
+            commandBuffer.TransitionImage(
+                depthImage!,
+                ImageLayout.DepthAttachmentOptimal,
+                PipelineStageFlags.LateFragmentTestsBit, AccessFlags.DepthStencilAttachmentWriteBit,
+                PipelineStageFlags.EarlyFragmentTestsBit | PipelineStageFlags.LateFragmentTestsBit,
+                AccessFlags.DepthStencilAttachmentReadBit | AccessFlags.DepthStencilAttachmentWriteBit
+            );
+
+            RenderChunkOutlines(commandBuffer);
+        }
 
         // GUI
 
         RenderGui(commandBuffer, delta);
 
+        // Present
+
         commandBuffer.TransitionImage(
-            image!,
+            colorImage!,
             ImageLayout.General,
             PipelineStageFlags.ColorAttachmentOutputBit, AccessFlags.ColorAttachmentWriteBit,
             PipelineStageFlags.TransferBit, AccessFlags.TransferReadBit
         );
 
-        // Present
+        commandBuffer.TransitionImage(
+            output,
+            ImageLayout.General,
+            PipelineStageFlags.BottomOfPipeBit, AccessFlags.None,
+            PipelineStageFlags.TransferBit, AccessFlags.TransferWriteBit
+        );
 
-        commandBuffer.BlitImage(image!, output, Filter.Nearest);
+        commandBuffer.BlitImage(colorImage!, output, Filter.Nearest);
 
         commandBuffer.TransitionImage(
             output,
@@ -407,6 +528,11 @@ internal class Program : Application {
     }
 
     private void RenderScene(GpuCommandBuffer commandBuffer) {
+        uniforms.Transform = camera.GetView() * Utils.CreatePerspective(70, colorImage!.Size, 0.01f, 8192);
+        uniforms.Camera = camera.GetData(Ctx.Swapchain.FramebufferSize.X, Ctx.Swapchain.FramebufferSize.Y);
+
+        var uniformBuffer = Ctx.FrameAllocator.Allocate(BufferUsageFlags.UniformBufferBit, uniforms);
+        
         commandBuffer.BeginGroup("Scene");
 
         commandBuffer.BindPipeline(pipeline);
@@ -416,11 +542,95 @@ internal class Program : Application {
             chunkBuffer,
             brickBuffer,
             voxelBuffer,
-            image
+            colorImage,
+            depthStorageImage
         ]);
-        commandBuffer.TraceRays(sbt, image!.Size.X, image.Size.Y, 1);
+        commandBuffer.TraceRays(sbt, colorImage!.Size.X, colorImage.Size.Y, 1);
 
         commandBuffer.EndGroup();
+    }
+
+    private void RenderChunkOutlines(GpuCommandBuffer commandBuffer) {
+        // Geometry
+
+        var vertexBuffer = Ctx.FrameAllocator.Allocate(
+            BufferUsageFlags.VertexBufferBit,
+            (ulong) chunkBoxes.Count * 8 * Utils.SizeOf<Vector3>()
+        );
+
+        var indexBuffer = Ctx.FrameAllocator.Allocate(
+            BufferUsageFlags.IndexBufferBit,
+            (ulong) chunkBoxes.Count * 12 * 2 * Utils.SizeOf<uint>()
+        );
+
+        var vertices = vertexBuffer.Map<Vector3>();
+        var indices = indexBuffer.Map<uint>();
+
+        var vertexI = 0u;
+        var indexI = 0;
+
+        foreach (var box in chunkBoxes) {
+            vertices[(int) vertexI + 0] = new Vector3(box.Min.X, box.Min.Y, box.Min.Z);
+            vertices[(int) vertexI + 1] = new Vector3(box.Min.X, box.Min.Y, box.Max.Z);
+            vertices[(int) vertexI + 2] = new Vector3(box.Max.X, box.Min.Y, box.Max.Z);
+            vertices[(int) vertexI + 3] = new Vector3(box.Max.X, box.Min.Y, box.Min.Z);
+
+            vertices[(int) vertexI + 4] = new Vector3(box.Min.X, box.Max.Y, box.Min.Z);
+            vertices[(int) vertexI + 5] = new Vector3(box.Min.X, box.Max.Y, box.Max.Z);
+            vertices[(int) vertexI + 6] = new Vector3(box.Max.X, box.Max.Y, box.Max.Z);
+            vertices[(int) vertexI + 7] = new Vector3(box.Max.X, box.Max.Y, box.Min.Z);
+
+            Line(indices, 0, 1);
+            Line(indices, 1, 2);
+            Line(indices, 2, 3);
+            Line(indices, 3, 0);
+
+            Line(indices, 4, 5);
+            Line(indices, 5, 6);
+            Line(indices, 6, 7);
+            Line(indices, 7, 4);
+
+            Line(indices, 0, 4);
+            Line(indices, 1, 5);
+            Line(indices, 2, 6);
+            Line(indices, 3, 7);
+
+            vertexI += 8;
+        }
+
+        vertexBuffer.Unmap();
+        indexBuffer.Unmap();
+
+        // Uniforms
+
+        var uniformBuffer = Ctx.FrameAllocator.Allocate(BufferUsageFlags.UniformBufferBit, new ChunkOutlinesUniforms {
+            Transform = camera.GetView() * Utils.CreatePerspective(70, colorImage!.Size, 0.01f, 8192),
+            Color = new Vector4(1)
+        });
+
+        // Commands
+
+        commandBuffer.BeginGroup("Chunk Outlines");
+        commandBuffer.BeginRenderPass(
+            new Attachment(colorImage!, AttachmentLoadOp.Load, AttachmentStoreOp.Store, null),
+            new Attachment(depthImage!, AttachmentLoadOp.Load, AttachmentStoreOp.Store, null)
+        );
+
+        commandBuffer.BindPipeline(chunkOutlinesPipeline);
+        commandBuffer.BindVertexBuffer(vertexBuffer);
+        commandBuffer.BindIndexBuffer(indexBuffer, IndexType.Uint32);
+        commandBuffer.BindDescriptorSet(0, [uniformBuffer]);
+        commandBuffer.DrawIndexed((uint) (indexBuffer.Size / Utils.SizeOf<uint>()));
+
+        commandBuffer.EndRenderPass();
+        commandBuffer.EndGroup();
+
+        return;
+
+        void Line(Span<uint> indices, uint v0, uint v1) {
+            indices[indexI++] = vertexI + v0;
+            indices[indexI++] = vertexI + v1;
+        }
     }
 
     private void RenderGui(GpuCommandBuffer commandBuffer, float delta) {
@@ -445,11 +655,12 @@ internal class Program : Application {
             ImGui.Separator();
 
             ImGui.Checkbox("Shadows", ref uniforms.Shadows);
+            ImGui.Checkbox("Chunk Outlines", ref chunkOutlines);
         }
 
         ImGui.End();
 
-        ImGuiImpl.EndFrame(commandBuffer, image!);
+        ImGuiImpl.EndFrame(commandBuffer, colorImage!);
         commandBuffer.EndGroup();
     }
 

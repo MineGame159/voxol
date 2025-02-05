@@ -1,4 +1,6 @@
 struct Uniforms {
+    float4x4 transform;
+
     float4 origin;
     float4 lowerLeftCorner;
     float4 horizontal;
@@ -73,7 +75,10 @@ uniform StructuredBuffer<Brick> bricks;
 uniform StructuredBuffer<Voxel> voxels;
 
 [format("rgba8")]
-uniform RWTexture2D image;
+uniform RWTexture2D<float4> image;
+
+[format("r32f")]
+uniform RWTexture2D<float> depth;
 
 struct RayPayload {
     float t;
@@ -86,23 +91,27 @@ struct HitAttributes {
 }
 
 static const let EPS = 0.001;
+static const let NEAR = EPS;
+static const let FAR = 8192.0;
 
 [shader("raygeneration")]
 void RayGen() {
     let pos = DispatchRaysIndex().xy;
     let size = DispatchRaysDimensions().xy;
 
+    let texCoord = int2(pos.x, size.y - pos.y - 1);
     let uv = float2(pos) / size;
 
     RayDesc ray;
     ray.Origin = u.origin.xyz;
-    ray.Direction = fixDirection(u.lowerLeftCorner.xyz + uv.x * u.horizontal.xyz + uv.y * u.vertical.xyz - u.origin.xyz);
-    ray.TMin = 0.0;
-    ray.TMax = float.maxValue;
+    ray.Direction = FixDirection(u.lowerLeftCorner.xyz + uv.x * u.horizontal.xyz + uv.y * u.vertical.xyz - u.origin.xyz);
+    ray.TMin = NEAR;
+    ray.TMax = FAR;
 
     RayPayload payload;
-
     TraceRay(accelStruct, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+
+    depth[texCoord] = GetDepth(ray, payload.t);
     var color = payload.color;
 
     if (u.shadows && payload.t >= 0) {
@@ -116,15 +125,26 @@ void RayGen() {
         }
     }
 
-    image[int2(pos.x, size.y - pos.y - 1)] = color;
+    image[texCoord] = color;
 }
 
-float3 fixDirection(float3 v) {
+float3 FixDirection(float3 v) {
     if (v.x == 0.0) v.x = EPS;
     if (v.y == 0.0) v.y = EPS;
     if (v.z == 0.0) v.z = EPS;
 
     return normalize(v);
+}
+
+float GetDepth(RayDesc ray, float t) {
+    if (t < 0)
+        return 1;
+
+    let pos = ray.Origin + ray.Direction * t;
+    let clipPos = mul(u.transform, float4(pos, 1.0));
+    let depth = clipPos.z / clipPos.w;
+
+    return depth;
 }
 
 [shader("miss")]

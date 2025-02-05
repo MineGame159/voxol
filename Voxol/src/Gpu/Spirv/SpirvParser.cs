@@ -98,7 +98,7 @@ public static class SpirvParser {
         var ptr = new OpTypePointer(producedBy[var.ResultType]);
 
         var type = ptr.StorageClass switch {
-            SpirvStorageClass.Uniform => DescriptorType.UniformBuffer,
+            SpirvStorageClass.Uniform => DescriptorType.UniformBufferDynamic,
             SpirvStorageClass.StorageBuffer => DescriptorType.StorageBuffer,
             _ => default(DescriptorType?)
         };

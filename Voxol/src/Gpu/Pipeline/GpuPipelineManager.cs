@@ -51,13 +51,16 @@ public class GpuPipelineManager {
             CreateShaderStage(shaderInfos[options.FragmentShader], ShaderStageFlags.FragmentBit)
         ];
 
-        Span<VertexInputBindingDescription> vertexBindings = [
-            new(
+        Span<VertexInputBindingDescription> vertexBindings =
+            stackalloc VertexInputBindingDescription[options.Format.Attributes.Length == 0 ? 0 : 1];
+
+        if (vertexBindings.Length > 0) {
+            vertexBindings[0] = new VertexInputBindingDescription(
                 binding: 0,
                 stride: options.Format.Stride,
                 inputRate: VertexInputRate.Vertex
-            )
-        ];
+            );
+        }
 
         Span<VertexInputAttributeDescription> vertexAttributes =
             stackalloc VertexInputAttributeDescription[options.Format.Attributes.Length];
@@ -85,7 +88,7 @@ public class GpuPipelineManager {
         );
 
         var inputAssemblyInfo = new PipelineInputAssemblyStateCreateInfo(
-            topology: PrimitiveTopology.TriangleList
+            topology: options.Topology
         );
 
         var viewportInfo = new PipelineViewportStateCreateInfo(
@@ -105,9 +108,9 @@ public class GpuPipelineManager {
         );
 
         var depthStencilInfo = new PipelineDepthStencilStateCreateInfo(
-            depthTestEnable: false,
-            depthWriteEnable: false,
-            depthCompareOp: CompareOp.Less
+            depthTestEnable: options.DepthAttachment != null,
+            depthWriteEnable: options.DepthAttachment?.Write ?? false,
+            depthCompareOp: options.DepthAttachment?.Compare ?? CompareOp.Less
         );
 
         Span<PipelineColorBlendAttachmentState> colorAttachmentBlends =
@@ -147,7 +150,8 @@ public class GpuPipelineManager {
 
         var renderingInfo = new PipelineRenderingCreateInfo(
             colorAttachmentCount: (uint) colorAttachmentFormats.Length,
-            pColorAttachmentFormats: Utils.AsPtr(colorAttachmentFormats)
+            pColorAttachmentFormats: Utils.AsPtr(colorAttachmentFormats),
+            depthAttachmentFormat: options.DepthAttachment?.Format ?? Format.Undefined
         );
 
         var layout = GetLayout(shaderInfos.Values.ToArray());
@@ -196,7 +200,7 @@ public class GpuPipelineManager {
 
         for (var i = 0; i < shaderGroups.Length; i++) {
             var group = options.ShaderGroups[i];
-            
+
             shaderGroups[i] = new RayTracingShaderGroupCreateInfoKHR(
                 type: group.Type,
                 generalShader: group.GeneralI ?? Vk.ShaderUnusedKhr,
@@ -225,7 +229,7 @@ public class GpuPipelineManager {
         foreach (var info in shaderInfos.Values) {
             ctx.Vk.DestroyShaderModule(ctx.Device, info.Handle, null);
         }
-        
+
         return new GpuRayTracePipeline(ctx, layout, handle, options);
     }
 

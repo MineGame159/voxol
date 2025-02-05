@@ -9,13 +9,13 @@ public class GpuDescriptorManager {
     private readonly DescriptorPool pool;
 
     private readonly MultiKeyDictionary<DescriptorType?, DescriptorSetLayout> layouts = new();
-    private readonly MultiKeyDictionary<IDescriptor?, DescriptorSet> sets = new();
+    private readonly MultiKeyDictionary<IDescriptor?, DescriptorSet> sets = new(DescriptorEqualityComparer.Instance);
 
     public GpuDescriptorManager(GpuContext ctx) {
         this.ctx = ctx;
 
         Span<DescriptorPoolSize> poolSizes = [
-            new(DescriptorType.UniformBuffer, 100),
+            new(DescriptorType.UniformBufferDynamic, 100),
             new(DescriptorType.StorageBuffer, 100),
             new(DescriptorType.StorageImage, 100),
             new(DescriptorType.CombinedImageSampler, 100),
@@ -43,7 +43,7 @@ public class GpuDescriptorManager {
                 }
             }
 
-            sets.Remove(descriptors => descriptors.Contains(descriptor));
+            sets.Remove(descriptors => descriptors.Contains(descriptor, DescriptorEqualityComparer.Instance));
         }
     }
 
@@ -116,6 +116,16 @@ public class GpuDescriptorManager {
                         *info = new DescriptorBufferInfo(
                             buffer: buffer,
                             range: Vk.WholeSize
+                        );
+
+                        write.PBufferInfo = info;
+                        break;
+                    }
+                    case GpuSubBuffer subBuffer: {
+                        var info = stackalloc DescriptorBufferInfo[1];
+                        *info = new DescriptorBufferInfo(
+                            buffer: subBuffer.Buffer,
+                            range: subBuffer.Size
                         );
 
                         write.PBufferInfo = info;

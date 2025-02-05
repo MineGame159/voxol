@@ -14,10 +14,14 @@ public class GpuGraphicsPipeline : GpuPipeline {
 }
 
 public readonly record struct GpuGraphicsPipelineOptions(
+    PrimitiveTopology Topology,
     GpuShaderModule VertexShader,
     GpuShaderModule FragmentShader,
     VertexFormat Format,
-    ColorAttachment[] ColorAttachments
+    ColorAttachment[] ColorAttachments,
+    DepthAttachment? DepthAttachment = null
 );
 
 public readonly record struct ColorAttachment(Format Format, bool Blend);
+
+public readonly record struct DepthAttachment(Format Format, CompareOp Compare, bool Write);

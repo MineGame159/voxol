@@ -11,12 +11,6 @@ public class GpuAccelStruct : GpuResource, IDescriptor {
         Buffer = buffer;
     }
 
-    public DescriptorType DescriptorType => DescriptorType.AccelerationStructureKhr;
-
-    public bool Equals(IDescriptor? other) {
-        return ReferenceEquals(this, other);
-    }
-
     public ulong DeviceAddress {
         get {
             unsafe {
@@ -32,15 +26,29 @@ public class GpuAccelStruct : GpuResource, IDescriptor {
 
     public override void Dispose() {
         Ctx.OnDestroyResource(this);
-        
+
         unsafe {
             Ctx.AccelStructApi.DestroyAccelerationStructure(Ctx.Device, Handle, null);
         }
 
         Buffer.Dispose();
-        
+
         GC.SuppressFinalize(this);
     }
+
+    // IDescriptor
+
+    public DescriptorType DescriptorType => DescriptorType.AccelerationStructureKhr;
+
+    public bool DescriptorEquals(IDescriptor other) {
+        return Equals(other);
+    }
+
+    public int DescriptorHashCode() {
+        return GetHashCode();
+    }
+
+    // Operators
 
     public static implicit operator AccelerationStructureKHR(GpuAccelStruct accelStruct) => accelStruct.Handle;
 }

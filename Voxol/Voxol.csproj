@@ -34,6 +34,10 @@
       <EmbeddedResource Include="shaders\rayGen.spv" />
       <None Remove="shaders\imgui.spv" />
       <EmbeddedResource Include="shaders\imgui.spv" />
+      <None Remove="shaders\depth_copy.spv" />
+      <EmbeddedResource Include="shaders\depth_copy.spv" />
+      <None Remove="shaders\chunk_outlines.spv" />
+      <EmbeddedResource Include="shaders\chunk_outlines.spv" />
     </ItemGroup>
 
 </Project>

@@ -4,7 +4,6 @@ using ImGuiNET;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
-using VMASharp;
 using Voxol.Gpu;
 
 namespace Voxol;
@@ -17,21 +16,20 @@ file record struct Uniforms {
 
 public static class ImGuiImpl {
     private static GpuContext ctx = null!;
-    
+
     private static GpuGraphicsPipeline? pipeline;
-    private static GpuBuffer uniformBuffer = null!;
     private static GpuImage fontImage = null!;
     private static Sampler sampler;
 
     public static void Init(GpuContext ctx) {
         ImGuiImpl.ctx = ctx;
-        
+
         ImGui.CreateContext();
-        
+
         var io = ImGui.GetIO();
-        
+
         // Platform
-        
+
         io.BackendFlags |= ImGuiBackendFlags.HasMouseCursors;
 
         Input.Ctx.Mice[0].MouseMove += (_, pos) => {
@@ -44,7 +42,7 @@ public static class ImGuiImpl {
 
         Input.Ctx.Keyboards[0].KeyDown += (_, key, scancode) => {
             var imKey = ConvertKey(key);
-            
+
             if (imKey != null) {
                 ImGui.GetIO().AddKeyEvent(imKey.Value, true);
                 ImGui.GetIO().SetKeyEventNativeData(imKey.Value, (int) key, scancode);
@@ -52,7 +50,7 @@ public static class ImGuiImpl {
         };
         Input.Ctx.Keyboards[0].KeyUp += (_, key, scancode) => {
             var imKey = ConvertKey(key);
-            
+
             if (imKey != null) {
                 ImGui.GetIO().AddKeyEvent(imKey.Value, false);
                 ImGui.GetIO().SetKeyEventNativeData(imKey.Value, (int) key, scancode);
@@ -61,9 +59,9 @@ public static class ImGuiImpl {
         Input.Ctx.Keyboards[0].KeyChar += (_, c) => ImGui.GetIO().AddInputCharactersUTF8(new ReadOnlySpan<char>(ref c));
 
         // Renderer
-        
+
         io.BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset;
-        
+
         CreateGpuResources(ctx);
     }
 
@@ -75,10 +73,10 @@ public static class ImGuiImpl {
         io.DisplaySize = ctx.Swapchain.FramebufferSize.As<float>().ToSystem();
         io.DisplayFramebufferScale = new Vector2(1, 1);
         io.DeltaTime = delta;
-        
+
         UpdateMouseCursor();
         UpdateKeyModifiers();
-        
+
         ImGui.NewFrame();
     }
 
@@ -111,7 +109,7 @@ public static class ImGuiImpl {
             };
         }
     }
-    
+
     private static void UpdateKeyModifiers() {
         var io = ImGui.GetIO();
 
@@ -132,7 +130,7 @@ public static class ImGuiImpl {
         if (fbWidth <= 0 || fbHeight <= 0) return;
 
         if (data.CmdListsCount == 0) return;
-        
+
         if (pipeline == null)
             CreatePipeline(commandBuffer.Ctx, image.Format);
 
@@ -141,8 +139,8 @@ public static class ImGuiImpl {
             Translate = -Vector2.One - data.DisplayPos * (new Vector2(2) / data.DisplaySize)
         };
 
-        uniformBuffer.Write(ref uniforms);
-        
+        var uniformBuffer = ctx.FrameAllocator.Allocate(BufferUsageFlags.UniformBufferBit, uniforms);
+
         commandBuffer.BeginRenderPass(new Attachment(image, AttachmentLoadOp.Load, AttachmentStoreOp.Store, null));
 
         commandBuffer.BindPipeline(pipeline!);
@@ -213,13 +211,14 @@ public static class ImGuiImpl {
 
         vertexBuffer.Unmap();
         commandBuffer.BindVertexBuffer(vertexBuffer);
-        
+
         indexBuffer.Unmap();
         commandBuffer.BindIndexBuffer(indexBuffer, IndexType.Uint16);
     }
 
     private static void CreatePipeline(GpuContext ctx, Format format) {
         pipeline = ctx.Pipelines.Create(new GpuGraphicsPipelineOptions(
+            PrimitiveTopology.TriangleList,
             GpuShaderModule.FromResource("Voxol.shaders.imgui.spv"),
             GpuShaderModule.FromResource("Voxol.shaders.imgui.spv"),
             new VertexFormat([
@@ -234,12 +233,6 @@ public static class ImGuiImpl {
     }
 
     private static void CreateGpuResources(GpuContext ctx) {
-        uniformBuffer = ctx.CreateBuffer(
-            Utils.SizeOf<Uniforms>(),
-            BufferUsageFlags.UniformBufferBit,
-            MemoryUsage.CPU_To_GPU
-        );
-
         var io = ImGui.GetIO();
         io.Fonts.GetTexDataAsRGBA32(out IntPtr pixels, out var width, out var height);
 

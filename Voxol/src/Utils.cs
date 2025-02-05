@@ -43,6 +43,21 @@ public static class Utils {
         return ms.ToArray();
     }
 
+    public static Matrix4x4 CreatePerspective(float fov, Vector2D<uint> size, float near, float far) {
+        var aspect = (float) size.X / size.Y;
+        var tanHalfFovy = MathF.Tan(DegToRad(fov) / 2.0f);
+
+        var m = new Matrix4x4 {
+            [0, 0] = 1 / (aspect * tanHalfFovy),
+            [1, 1] = -(1 / tanHalfFovy),
+            [2, 2] = far / (near - far),
+            [2, 3] = -1,
+            [3, 2] = -(far * near) / (far - near)
+        };
+
+        return m;
+    }
+
     public static string FormatBytes(ulong bytes) {
         if (bytes / 1024.0 < 1) return $"{bytes} b";
         if (bytes / 1024.0 / 1024.0 < 1) return $"{bytes / 1024.0:F1} kB";
@@ -116,8 +131,26 @@ public static class Vector3DMethods {
     }
 }
 
+public static class Box3DMethods {
+    public static void Expand<T>(ref this Box3D<T> box, Box3D<T> other) where T : unmanaged, IFormattable, IEquatable<T>, IComparable<T> {
+        box.Min = Vector3D.Min(box.Min, other.Min);
+        box.Max = Vector3D.Max(box.Max, other.Max);
+    }
+}
+
 public static class ListMethods {
     public static ref T Ref<T>(this List<T> list, int i) {
         return ref CollectionsMarshal.AsSpan(list)[i];
+    }
+}
+
+public static class ReadOnlySpanMethods {
+    public static bool Contains<T>(this ReadOnlySpan<T?> span, T key, EqualityComparer<T?> comparer) {
+        foreach (var item in span) {
+            if (comparer.Equals(item, key))
+                return true;
+        }
+
+        return false;
     }
 }

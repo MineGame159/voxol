@@ -200,11 +200,11 @@ public class GpuContext {
                     1, new MemoryBarrier(
                         srcAccessMask: AccessFlags.AccelerationStructureWriteBitKhr,
                         dstAccessMask: AccessFlags.AccelerationStructureReadBitKhr
-                    ), 
+                    ),
                     0, null,
                     0, null
                 );
-                
+
                 // ReSharper disable once AccessToModifiedClosure
                 AccelStructApi.CmdWriteAccelerationStructuresProperties(commandBuffer, 1, accelStruct,
                     QueryType.AccelerationStructureCompactedSizeKhr, queryPool, 0);
@@ -215,20 +215,21 @@ public class GpuContext {
 
         if (bottomLevel) {
             ulong compactedSize = 0;
-            Vk.GetQueryPoolResults(Device, queryPool, 0, 1, sizeof(ulong), ref compactedSize, sizeof(ulong), QueryResultFlags.ResultWaitBit);
-            
+            Vk.GetQueryPoolResults(Device, queryPool, 0, 1, sizeof(ulong), ref compactedSize, sizeof(ulong),
+                QueryResultFlags.ResultWaitBit);
+
             var compactedAccelStructBuffer = CreateBuffer(
                 compactedSize,
                 BufferUsageFlags.AccelerationStructureStorageBitKhr | BufferUsageFlags.ShaderDeviceAddressBit,
                 MemoryUsage.GPU_Only
             );
-            
+
             AccelStructApi.CreateAccelerationStructure(Device, new AccelerationStructureCreateInfoKHR(
                 buffer: compactedAccelStructBuffer,
                 size: compactedSize,
                 type: buildInfo.Type
             ), null, out var compactedAccelStruct);
-            
+
             Run(commandBuffer => {
                 AccelStructApi.CmdCopyAccelerationStructure(commandBuffer, new CopyAccelerationStructureInfoKHR(
                     // ReSharper disable once AccessToModifiedClosure
@@ -237,7 +238,7 @@ public class GpuContext {
                     mode: CopyAccelerationStructureModeKHR.CompactKhr
                 ));
             });
-            
+
             AccelStructApi.DestroyAccelerationStructure(Device, accelStruct, null);
             accelStructBuffer.Dispose();
 
@@ -390,7 +391,8 @@ public class GpuContext {
             enabledExtensions[i + 2] = requiredExtensions[i];
         }
 
-        Span<ValidationFeatureEnableEXT> b = [ValidationFeatureEnableEXT.BestPracticesExt];
+        Span<ValidationFeatureEnableEXT> b =
+            [ValidationFeatureEnableEXT.BestPracticesExt, ValidationFeatureEnableEXT.SynchronizationValidationExt];
 
         var a = new ValidationFeaturesEXT(
             enabledValidationFeatureCount: (uint) b.Length,

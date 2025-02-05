@@ -22,14 +22,14 @@ public class Camera {
                 MathF.Sin(Utils.DegToRad(Yaw)) * MathF.Cos(Utils.DegToRad(Pitch))
             ));
         }
-        
+
         return Vector3.Normalize(new Vector3(
             MathF.Cos(Utils.DegToRad(Yaw)),
             0,
-            MathF.Sin(Utils.DegToRad(Yaw)) 
+            MathF.Sin(Utils.DegToRad(Yaw))
         ));
     }
-    
+
     public void Move(float delta) {
         // Rotation
         if (Input.IsKeyDown(Key.Right)) Yaw += 90 * delta;
@@ -38,7 +38,7 @@ public class Camera {
         if (Input.IsKeyDown(Key.Down)) Pitch -= 90 * delta;
 
         Pitch = Math.Clamp(Pitch, -89.95f, 89.95f);
-        
+
         // Movement
         var speed = 20 * delta;
         if (Input.IsKeyDown(Key.ControlLeft)) speed *= 15;
@@ -60,6 +60,10 @@ public class Camera {
     public CameraData GetData(uint width, uint height) {
         return new CameraData(Pos, Pos + GetDirection(true), 70, (float) width / height);
     }
+
+    public Matrix4x4 GetView() {
+        return Matrix4x4.CreateLookAt(Pos, Pos + GetDirection(true), Vector3.UnitY);
+    }
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -68,7 +72,7 @@ public readonly struct CameraData {
     public readonly Vector4 LowerLeftCorner;
     public readonly Vector4 Horizontal;
     public readonly Vector4 Vertical;
-    
+
     public CameraData(Vector3 pos, Vector3 lookAt, float fov, float aspectRatio) {
         var theta = Utils.DegToRad(fov);
         var h = MathF.Tan(theta / 2);
